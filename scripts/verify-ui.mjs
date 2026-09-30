@@ -210,13 +210,57 @@ try {
   check(await page.locator('#trace-log .trace-row').count() > 0, 'bottom trace drawer populated');
 
   // --- unread badge -------------------------------------------------------
-  const badge = page.locator('.pane[data-pane-id="p2"] .pane-unread');
-  check(await badge.isVisible(), 'unread badge marks an unfocused pane that got a message');
+  // Focus p1, then push a message to p2 from the server side; the badge must
+  // light up on the unfocused pane.
+  await page.locator('.pane[data-pane-id="p1"]').click();
+  const pingMsg = `badge-${Date.now()}`;
+  await server.orchestrator.dispatch({ to: 'p2', text: pingMsg, kind: 'chat' });
+  await page.waitForFunction(
+    () => !document.querySelector('.pane[data-pane-id="p2"] .pane-unread').hidden,
+    null, { timeout: 10000 },
+  );
+  check(true, 'unread badge marks an unfocused pane that got a message');
 
   // --- layout sanity: panes must not be covered by the panel -------------
   const p1 = await page.locator('.pane[data-pane-id="p1"]').boundingBox();
   check(p1 !== null && orchBox !== null && p1.x + p1.width <= orchBox.x + 2,
     'grid reflowed beside the panel instead of being covered');
+
+  // --- appearance: theme + background (reload-sensitive, runs last) -------
+  await page.click('#open-settings');
+  await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });
+  check(true, 'settings panel opens');
+
+  await page.selectOption('#set-theme', 'matrix');
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === 'matrix', null, { timeout: 5000 },
+  );
+  const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  check(accent === '#00ff41', `matrix theme swaps accent to phosphor green (${accent})`);
+
+  // background image upload (tiny generated PNG)
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP8//8/AzGAhShCAAD//wPzBAN6D9D7nwAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  await page.setInputFiles('#set-bg', { name: 'bg.png', mimeType: 'image/png', buffer: png });
+  await page.waitForFunction(() => document.body.classList.contains('has-bg'), null, { timeout: 5000 });
+  const bgImg = await page.evaluate(() => document.getElementById('bg-layer').style.backgroundImage);
+  check(bgImg.includes('data:image/png'), 'background image applied as data URL');
+
+  // persistence across reload
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => document.getElementById('status')?.dataset.state === 'live', null, { timeout: 15000 });
+  const persisted = await page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    hasBg: document.body.classList.contains('has-bg'),
+  }));
+  check(persisted.theme === 'matrix' && persisted.hasBg, 'appearance persists across reload');
+
+  // reset so a manual look afterwards starts clean
+  await page.evaluate(() => {
+    localStorage.removeItem('clihive.appearance');
+  });
 
   await mkdir(path.dirname(shotPath), { recursive: true });
   await page.screenshot({ path: shotPath });

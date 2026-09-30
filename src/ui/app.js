@@ -55,6 +55,15 @@ const dom = {
   vitalRunningN: $('vital-running-n'),
   vitalAttention: $('vital-attention'),
   vitalAttentionN: $('vital-attention-n'),
+  settings: $('settings'),
+  openSettings: $('open-settings'),
+  closeSettings: $('close-settings'),
+  setTheme: $('set-theme'),
+  setBg: $('set-bg'),
+  setBgOpacity: $('set-bg-opacity'),
+  setScanlines: $('set-scanlines'),
+  setGlow: $('set-glow'),
+  setBgClear: $('set-bg-clear'),
 };
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -98,15 +107,39 @@ function send(frame) {
 
 // ---------------------------------------------------------------- terminals
 
-const TERM_THEME = {
-  background: '#101012', foreground: '#bdbab4', cursor: '#e8a33d',
-  selectionBackground: '#3a3833',
-  black: '#28282d', red: '#d96c6c', green: '#8fbf7f', yellow: '#d4b36a',
-  blue: '#8aaee0', magenta: '#c79bc7', cyan: '#8fbfb2', white: '#bdbab4',
-  brightBlack: '#5c5a55', brightRed: '#e28a8a', brightGreen: '#a8d19a',
-  brightYellow: '#e2c687', brightBlue: '#a6c3ea', brightMagenta: '#d7b3d7',
-  brightCyan: '#a8d1c6', brightWhite: '#efeeec',
+const TERM_THEMES = {
+  amber: {
+    background: '#101012', foreground: '#bdbab4', cursor: '#e8a33d',
+    selectionBackground: '#3a3833',
+    black: '#28282d', red: '#d96c6c', green: '#8fbf7f', yellow: '#d4b36a',
+    blue: '#8aaee0', magenta: '#c79bc7', cyan: '#8fbfb2', white: '#bdbab4',
+    brightBlack: '#5c5a55', brightRed: '#e28a8a', brightGreen: '#a8d19a',
+    brightYellow: '#e2c687', brightBlue: '#a6c3ea', brightMagenta: '#d7b3d7',
+    brightCyan: '#a8d1c6', brightWhite: '#efeeec',
+  },
+  matrix: {
+    background: '#020502', foreground: '#00ff41', cursor: '#00ff41',
+    selectionBackground: '#0e3a1c',
+    black: '#062008', red: '#ff5f56', green: '#00ff41', yellow: '#7cf2a4',
+    blue: '#00d9ff', magenta: '#3be873', cyan: '#00d9ff', white: '#7cf2a4',
+    brightBlack: '#1b9c4d', brightRed: '#ff8a80', brightGreen: '#3bff70',
+    brightYellow: '#b0ffea', brightBlue: '#66e5ff', brightMagenta: '#7cf2a4',
+    brightCyan: '#8de8ff', brightWhite: '#eafff0',
+  },
+  void: {
+    background: '#050506', foreground: '#e0e0e0', cursor: '#ffffff',
+    selectionBackground: '#2a2a2e',
+    black: '#16161a', red: '#e08a8a', green: '#a8d1a0', yellow: '#c0c0a0',
+    blue: '#a8a8ff', magenta: '#c0a8d8', cyan: '#a0c8c8', white: '#e0e0e0',
+    brightBlack: '#3c3c44', brightRed: '#f0a0a0', brightGreen: '#c0e0b8',
+    brightYellow: '#d8d8b8', brightBlue: '#c0c0ff', brightMagenta: '#d8c0e8',
+    brightCyan: '#b8e0e0', brightWhite: '#ffffff',
+  },
 };
+
+function termTheme() {
+  return TERM_THEMES[settings.theme] ?? TERM_THEMES.amber;
+}
 
 function newTerminal() {
   const term = new window.Terminal({
@@ -116,7 +149,7 @@ function newTerminal() {
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true,
-    theme: TERM_THEME,
+    theme: termTheme(),
   });
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -514,6 +547,10 @@ const COMMANDS = [
   { id: 'toggle-trace', label: 'Toggle activity trace', hint: 'Ctrl+Shift+T', run: () => setTraceOpen(dom.traceDrawer.dataset.open !== 'true') },
   { id: 'toggle-sidebar', label: 'Toggle sidebar', hint: 'Ctrl+B', run: () => toggleSidebar() },
   { id: 'new-workspace', label: 'New workspace', run: () => addWorkspace() },
+  { id: 'theme-matrix', label: 'Theme: Matrix', run: () => { settings.theme = 'matrix'; saveSettings(); applySettings(); } },
+  { id: 'theme-amber', label: 'Theme: Amber graphite', run: () => { settings.theme = 'amber'; saveSettings(); applySettings(); } },
+  { id: 'theme-void', label: 'Theme: Void', run: () => { settings.theme = 'void'; saveSettings(); applySettings(); } },
+  { id: 'open-settings', label: 'Appearance settings', run: () => { dom.settings.hidden = false; } },
 ];
 
 let paletteIndex = 0;
@@ -609,6 +646,79 @@ function setTraceOpen(open) {
 
 function fitAll() { for (const entry of panes.values()) fitPane(entry); }
 
+// ---------------------------------------------------------------- appearance
+
+const SETTINGS_KEY = 'clihive.appearance';
+
+const settings = loadSettings();
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return { theme: 'amber', bgImage: null, bgOpacity: 35, scanlines: false, glow: true, ...JSON.parse(raw) };
+  } catch { /* corrupt state falls through to defaults */ }
+  return { theme: 'amber', bgImage: null, bgOpacity: 35, scanlines: false, glow: true };
+}
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* image too big for quota */ }
+}
+
+function applySettings() {
+  document.documentElement.dataset.theme = settings.theme;
+  document.body.classList.toggle('scanlines-on', settings.scanlines);
+  document.body.classList.toggle('glow-on', settings.glow);
+
+  const bgLayer = $('bg-layer');
+  if (settings.bgImage) {
+    bgLayer.style.backgroundImage = `url(${settings.bgImage})`;
+    document.body.classList.add('has-bg');
+  } else {
+    bgLayer.style.backgroundImage = '';
+    document.body.classList.remove('has-bg');
+  }
+  document.documentElement.style.setProperty('--bg-img-strength', String(settings.bgOpacity));
+
+  // live-swap terminal palettes
+  const theme = termTheme();
+  for (const entry of panes.values()) entry.term.options.theme = theme;
+
+  // reflect into the controls
+  dom.setTheme.value = settings.theme;
+  dom.setBgOpacity.value = String(settings.bgOpacity);
+  dom.setScanlines.checked = settings.scanlines;
+  dom.setGlow.checked = settings.glow;
+}
+
+dom.setTheme.addEventListener('change', () => { settings.theme = dom.setTheme.value; saveSettings(); applySettings(); });
+dom.setBgOpacity.addEventListener('input', () => { settings.bgOpacity = Number(dom.setBgOpacity.value); saveSettings(); applySettings(); });
+dom.setScanlines.addEventListener('change', () => { settings.scanlines = dom.setScanlines.checked; saveSettings(); applySettings(); });
+dom.setGlow.addEventListener('change', () => { settings.glow = dom.setGlow.checked; saveSettings(); applySettings(); });
+
+dom.setBg.addEventListener('change', () => {
+  const file = dom.setBg.files?.[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { setStatus('image too large (max 8 MB)', 'down'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    settings.bgImage = String(reader.result);
+    saveSettings();
+    applySettings();
+  };
+  reader.readAsDataURL(file);
+});
+
+dom.setBgClear.addEventListener('click', () => {
+  settings.bgImage = null;
+  dom.setBg.value = '';
+  saveSettings();
+  applySettings();
+});
+
+dom.openSettings.addEventListener('click', () => { dom.settings.hidden = !dom.settings.hidden; });
+dom.closeSettings.addEventListener('click', () => { dom.settings.hidden = true; });
+dom.settings.addEventListener('click', (e) => { if (e.target === dom.settings) dom.settings.hidden = true; });
+
 // ---------------------------------------------------------------- wiring
 
 dom.addPane.addEventListener('click', () => addPane());
@@ -668,4 +778,5 @@ setInterval(() => { renderFleet(); updateVitals(); }, 3000);
 
 renderWorkspaces();
 refreshEmpty();
+applySettings();
 connect();
