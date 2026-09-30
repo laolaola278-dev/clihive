@@ -172,8 +172,20 @@ try {
   );
   check(true, 'orchestrator message visible in both pane viewports');
 
+  // --- mission-control chrome --------------------------------------------
+  check(await page.locator('.sidebar').isVisible(), 'left workspace sidebar present');
+  check((await page.locator('.titlebar').boundingBox()).height === 36, 'titlebar is 36px');
+  check(await page.locator('#fleet').isVisible(), 'fleet roster visible in the deck');
+  check((await page.locator('.fleet-row').count()) >= 2, 'fleet lists both panes');
+
+  // palette
+  await page.keyboard.press('Control+k');
+  await page.waitForSelector('#palette:not([hidden])', { timeout: 5000 });
+  check(true, 'command palette opens on Ctrl+K');
+  await page.keyboard.press('Escape');
+
   // --- trace views --------------------------------------------------------
-  await page.click('.tab[data-tab="trace"]');
+  await page.click('.dtab[data-tab="trace"]');
   await page.waitForSelector('#orch-trace .trace-row', { timeout: 10000 });
   const kinds = await page.locator('#orch-trace .trace-row').evaluateAll(
     (rows) => rows.map((r) => r.dataset.kind),

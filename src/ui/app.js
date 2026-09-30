@@ -1,5 +1,6 @@
-// The window: a grid of small CLI panes, a hideable orchestrator on the right,
-// and a trace feed that shows whether messages actually landed.
+// clihive window — Bridge layout.
+// 36px titlebar · 240px workspace sidebar · hero terminal grid · 326px
+// mission-control deck (Fleet + Orchestrator + Shared + Trace) · palette.
 
 const WS_CLIENT = {
   PANE_CREATE: 'pane.create',
@@ -11,46 +12,65 @@ const WS_CLIENT = {
   ORCH_ASK: 'orch.ask',
 };
 
-const el = (id) => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 const dom = {
-  body: document.querySelector('.body'),
-  grid: el('grid'),
-  gridEmpty: el('grid-empty'),
-  status: el('status'),
-  addPane: el('add-pane'),
-  emptyAdd: el('empty-add'),
-  newPaneMode: el('new-pane-mode'),
-  orch: el('orchestrator'),
-  toggleOrch: el('toggle-orch'),
-  closeOrch: el('close-orch'),
-  orchMode: el('orch-mode'),
-  orchLog: el('orch-log'),
-  orchTrace: el('orch-trace'),
-  orchForm: el('orch-form'),
-  orchInput: el('orch-input'),
-  orchTarget: el('orch-target'),
-  composerHint: el('composer-hint'),
-  sharedLog: el('shared-log'),
-  traceFilter: el('trace-filter'),
-  traceDrawer: el('trace-drawer'),
-  traceLog: el('trace-log'),
-  toggleTrace: el('toggle-trace'),
-  closeTrace: el('close-trace'),
+  body: $('body'),
+  sidebar: $('sidebar'),
+  sidebarRail: $('sidebar-rail'),
+  sidebarHide: $('sidebar-hide'),
+  wsList: $('ws-list'),
+  wsAdd: $('ws-add'),
+  wsCount: $('ws-count'),
+  wsName: $('ws-name'),
+  grid: $('grid'),
+  gridEmpty: $('grid-empty'),
+  status: $('status'),
+  addPane: $('add-pane'),
+  emptyAdd: $('empty-add'),
+  newPaneMode: $('new-pane-mode'),
+  openPalette: $('open-palette'),
+  palette: $('palette'),
+  paletteInput: $('palette-input'),
+  paletteList: $('palette-list'),
+  orch: $('orchestrator'),
+  toggleOrch: $('toggle-orch'),
+  closeOrch: $('close-orch'),
+  orchLog: $('orch-log'),
+  orchForm: $('orch-form'),
+  orchInput: $('orch-input'),
+  orchTarget: $('orch-target'),
+  composerHint: $('composer-hint'),
+  sharedLog: $('shared-log'),
+  traceFilter: $('trace-filter'),
+  orchTrace: $('orch-trace'),
+  traceDrawer: $('trace-drawer'),
+  traceLog: $('trace-log'),
+  toggleTrace: $('toggle-trace'),
+  closeTrace: $('close-trace'),
+  fleet: $('fleet'),
+  fleetLabel: $('fleet-label'),
+  fleetList: $('fleet-list'),
+  vitalRunning: $('vital-running'),
+  vitalRunningN: $('vital-running-n'),
+  vitalAttention: $('vital-attention'),
+  vitalAttentionN: $('vital-attention-n'),
 };
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
 
-/** paneId -> { term, fit, pane, node, unread } */
+/** paneId -> { term, fit, pane, node, unread, lastOutputAt } */
 const panes = new Map();
 let focusedPane = null;
-/** Every trace event we have seen, for re-filtering. */
 const traceEvents = [];
 let ws = null;
 let reconnectDelay = 500;
 
-// --------------------------------------------------------------------------
-// helpers
+// workspaces are client-side groupings of pane ids
+const workspaces = new Map([['main', { name: 'main', panes: [] }]]);
+let activeWorkspace = 'main';
+
+// ---------------------------------------------------------------- helpers
 
 function time(ts) {
   return new Date(ts).toLocaleTimeString([], { hour12: false });
@@ -65,7 +85,6 @@ function atBottom(node) {
   return node.scrollHeight - node.scrollTop - node.clientHeight < 40;
 }
 
-/** Append to a log, holding the scroll position unless already at the bottom. */
 function appendTo(node, child, cap = 500) {
   const stick = atBottom(node);
   node.append(child);
@@ -77,37 +96,34 @@ function send(frame) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
 }
 
-// --------------------------------------------------------------------------
-// panes
+// ---------------------------------------------------------------- terminals
+
+const TERM_THEME = {
+  background: '#101012', foreground: '#bdbab4', cursor: '#e8a33d',
+  selectionBackground: '#3a3833',
+  black: '#28282d', red: '#d96c6c', green: '#8fbf7f', yellow: '#d4b36a',
+  blue: '#8aaee0', magenta: '#c79bc7', cyan: '#8fbfb2', white: '#bdbab4',
+  brightBlack: '#5c5a55', brightRed: '#e28a8a', brightGreen: '#a8d19a',
+  brightYellow: '#e2c687', brightBlue: '#a6c3ea', brightMagenta: '#d7b3d7',
+  brightCyan: '#a8d1c6', brightWhite: '#efeeec',
+};
 
 function newTerminal() {
   const term = new window.Terminal({
-    fontFamily: '"Cascadia Mono", "JetBrains Mono", Consolas, monospace',
+    fontFamily: '"Cascadia Code","Cascadia Mono","JetBrains Mono",Consolas,monospace',
     fontSize: 12,
     lineHeight: 1.2,
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true,
-    theme: {
-      background: '#08090b',
-      foreground: '#dfe3ea',
-      cursor: '#e8a33d',
-      selectionBackground: '#33373f',
-      black: '#0b0c0e',
-      brightBlack: '#5b6270',
-      red: '#d9704a',
-      green: '#5cb87a',
-      yellow: '#e8a33d',
-      blue: '#6f8fb5',
-      magenta: '#b58fd0',
-      cyan: '#5fb3b3',
-      white: '#dfe3ea',
-    },
+    theme: TERM_THEME,
   });
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
   return { term, fit };
 }
+
+// ---------------------------------------------------------------- panes
 
 function paneChrome(pane) {
   const node = document.createElement('div');
@@ -115,7 +131,6 @@ function paneChrome(pane) {
   node.dataset.paneId = pane.id;
   node.dataset.alive = String(pane.alive);
   node.dataset.focused = 'false';
-
   node.innerHTML = `
     <div class="pane-head">
       <span class="pane-dot"></span>
@@ -124,67 +139,48 @@ function paneChrome(pane) {
       <span class="pane-meta">
         <span class="pane-unread" hidden></span>
         <span class="pane-badge" data-mode="${pane.deliveryMode}">${pane.deliveryMode}</span>
-        <span class="pane-pid">pid ${pane.pid ?? '-'}</span>
         <button class="icon-btn pane-kill" type="button" title="Close pane">&times;</button>
       </span>
     </div>
-    <div class="pane-term"></div>
-  `;
-  // Label via textContent so a hostile label cannot inject markup.
+    <div class="pane-term"></div>`;
   node.querySelector('.pane-label').textContent = pane.label;
   return node;
 }
 
 function focusPane(paneId) {
   focusedPane = paneId;
-  for (const [id, entry] of panes) {
-    entry.node.dataset.focused = String(id === paneId);
-  }
+  for (const [id, entry] of panes) entry.node.dataset.focused = String(id === paneId);
   const entry = panes.get(paneId);
-  if (entry) {
-    entry.term.focus();
-    entry.unread = 0;
-    renderUnread(entry);
-  }
+  if (entry) { entry.term.focus(); entry.unread = 0; renderUnread(entry); }
   syncTargets();
+  renderFleet();
 }
 
 function renderUnread(entry) {
   const badge = entry.node.querySelector('.pane-unread');
-  if (entry.unread > 0) {
-    badge.textContent = String(entry.unread);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
+  if (entry.unread > 0) { badge.textContent = String(entry.unread); badge.hidden = false; }
+  else badge.hidden = true;
 }
 
 function mountPane(pane) {
   if (panes.has(pane.id)) return panes.get(pane.id);
-
   const node = paneChrome(pane);
   const { term, fit } = newTerminal();
-  const entry = { term, fit, pane, node, unread: 0 };
+  const entry = { term, fit, pane, node, unread: 0, lastOutputAt: 0 };
   panes.set(pane.id, entry);
+  workspaces.get(activeWorkspace)?.panes.push(pane.id);
 
   dom.grid.append(node);
   term.open(node.querySelector('.pane-term'));
-
   term.onData((data) => send({ type: WS_CLIENT.PANE_INPUT, paneId: pane.id, data }));
   node.addEventListener('mousedown', () => focusPane(pane.id));
-  node.querySelector('.pane-kill').addEventListener('click', (event) => {
-    event.stopPropagation();
+  node.querySelector('.pane-kill').addEventListener('click', (e) => {
+    e.stopPropagation();
     send({ type: WS_CLIENT.PANE_KILL, paneId: pane.id });
   });
 
-  // Fit once laid out, then tell the PTY the real geometry.
-  requestAnimationFrame(() => {
-    fitPane(entry);
-    send({ type: WS_CLIENT.PANE_SUBSCRIBE, paneId: pane.id });
-  });
-
-  refreshEmpty();
-  syncTargets();
+  requestAnimationFrame(() => { fitPane(entry); send({ type: WS_CLIENT.PANE_SUBSCRIBE, paneId: pane.id }); });
+  refreshEmpty(); syncTargets(); renderWorkspaces(); renderFleet();
   if (!focusedPane) focusPane(pane.id);
   return entry;
 }
@@ -192,15 +188,8 @@ function mountPane(pane) {
 function fitPane(entry) {
   try {
     entry.fit.fit();
-    send({
-      type: WS_CLIENT.PANE_RESIZE,
-      paneId: entry.pane.id,
-      cols: entry.term.cols,
-      rows: entry.term.rows,
-    });
-  } catch {
-    // The pane is not laid out yet; the next resize pass will handle it.
-  }
+    send({ type: WS_CLIENT.PANE_RESIZE, paneId: entry.pane.id, cols: entry.term.cols, rows: entry.term.rows });
+  } catch { /* not laid out yet */ }
 }
 
 function dropPane(paneId) {
@@ -209,13 +198,13 @@ function dropPane(paneId) {
   entry.term.dispose();
   entry.node.remove();
   panes.delete(paneId);
+  for (const ws of workspaces.values()) ws.panes = ws.panes.filter((id) => id !== paneId);
   if (focusedPane === paneId) {
     focusedPane = null;
     const next = panes.keys().next();
     if (!next.done) focusPane(next.value);
   }
-  refreshEmpty();
-  syncTargets();
+  refreshEmpty(); syncTargets(); renderWorkspaces(); renderFleet();
 }
 
 function syncPaneList(list) {
@@ -223,62 +212,141 @@ function syncPaneList(list) {
   for (const pane of list) {
     seen.add(pane.id);
     const entry = panes.get(pane.id);
-    if (!entry) {
-      mountPane(pane);
-      continue;
-    }
+    if (!entry) { mountPane(pane); continue; }
     entry.pane = pane;
     entry.node.dataset.alive = String(pane.alive);
-    entry.node.querySelector('.pane-pid').textContent = `pid ${pane.pid ?? '-'}`;
   }
-  for (const id of [...panes.keys()]) {
-    if (!seen.has(id)) dropPane(id);
+  for (const id of [...panes.keys()]) if (!seen.has(id)) dropPane(id);
+  renderFleet(); updateVitals();
+}
+
+function refreshEmpty() { dom.gridEmpty.hidden = panes.size > 0; }
+
+// ---------------------------------------------------------------- workspaces
+
+function renderWorkspaces() {
+  dom.wsList.textContent = '';
+  for (const [id, w] of workspaces) {
+    const btn = document.createElement('button');
+    btn.className = 'ws-item';
+    btn.type = 'button';
+    btn.dataset.active = String(id === activeWorkspace);
+    const name = document.createElement('span');
+    name.textContent = w.name;
+    const count = document.createElement('span');
+    count.className = 'ws-count-panes';
+    count.textContent = String(w.panes.length);
+    btn.append(name, count);
+    btn.addEventListener('click', () => { activeWorkspace = id; dom.wsName.textContent = w.name; renderWorkspaces(); });
+    dom.wsList.append(btn);
+  }
+  dom.wsCount.textContent = `${workspaces.size} workspace${workspaces.size === 1 ? '' : 's'}`;
+}
+
+// ---------------------------------------------------------------- fleet
+
+function paneAttention(entry) {
+  return entry.unread > 0;
+}
+
+function paneActivity(entry) {
+  if (!entry.pane.alive) return 'exited';
+  if (entry.unread > 0) return `${entry.unread} unread`;
+  if (Date.now() - entry.lastOutputAt < 2500) return 'working';
+  return 'idle';
+}
+
+function renderFleet() {
+  const alive = [...panes.values()];
+  dom.fleet.hidden = alive.length === 0;
+  dom.fleetLabel.textContent = `Fleet · ${alive.length}`;
+  dom.fleetList.textContent = '';
+
+  const sorted = alive.sort((a, b) => Number(paneAttention(b)) - Number(paneAttention(a)));
+  for (const entry of sorted) {
+    const attention = paneAttention(entry);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'fleet-row';
+    row.dataset.attention = String(attention);
+    row.title = `${entry.pane.id} — jump to pane`;
+
+    const dot = document.createElement('span');
+    dot.className = 'fleet-dot';
+    dot.style.backgroundColor = !entry.pane.alive ? 'var(--text-muted)'
+      : attention ? 'var(--danger)'
+      : (Date.now() - entry.lastOutputAt < 2500) ? 'var(--accent)' : 'var(--ok)';
+
+    const name = document.createElement('span');
+    name.className = 'fleet-name';
+    name.textContent = entry.pane.label;
+
+    const act = document.createElement('span');
+    act.className = 'fleet-activity';
+    act.textContent = paneActivity(entry);
+
+    const jump = document.createElement('span');
+    jump.className = 'fleet-jump';
+    jump.textContent = '→';
+
+    row.append(dot, name, act, jump);
+    row.addEventListener('click', () => {
+      focusPane(entry.pane.id);
+      entry.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+    dom.fleetList.append(row);
   }
 }
 
-function refreshEmpty() {
-  dom.gridEmpty.hidden = panes.size > 0;
+function updateVitals() {
+  const alive = [...panes.values()].filter((e) => e.pane.alive);
+  const running = alive.filter((e) => Date.now() - e.lastOutputAt < 2500).length;
+  const attention = alive.filter((e) => e.unread > 0).length;
+  dom.vitalRunning.hidden = running === 0;
+  dom.vitalRunningN.textContent = String(running);
+  dom.vitalAttention.hidden = attention === 0;
+  dom.vitalAttentionN.textContent = String(attention);
 }
 
-/** Keep the orchestrator target list in step with the roster. */
+function jumpToAttention() {
+  const target = [...panes.values()].find((e) => e.unread > 0)
+    || [...panes.values()].find((e) => Date.now() - e.lastOutputAt < 2500);
+  if (target) { focusPane(target.pane.id); target.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+}
+
+dom.vitalRunning.addEventListener('click', jumpToAttention);
+dom.vitalAttention.addEventListener('click', jumpToAttention);
+
+// ---------------------------------------------------------------- targets
+
 function syncTargets() {
-  const previous = dom.orchTarget.value;
+  const prev = dom.orchTarget.value;
   dom.orchTarget.textContent = '';
-
   const all = document.createElement('option');
-  all.value = 'all';
-  all.textContent = 'all panes';
+  all.value = 'all'; all.textContent = 'all panes';
   dom.orchTarget.append(all);
-
   for (const [id, entry] of panes) {
     if (!entry.pane.alive) continue;
-    const option = document.createElement('option');
-    option.value = id;
-    option.textContent = `${id} · ${entry.pane.label}`;
-    dom.orchTarget.append(option);
+    const o = document.createElement('option');
+    o.value = id; o.textContent = `${id} · ${entry.pane.label}`;
+    dom.orchTarget.append(o);
   }
-
-  dom.orchTarget.value = [...dom.orchTarget.options].some((o) => o.value === previous)
-    ? previous
-    : 'all';
+  dom.orchTarget.value = [...dom.orchTarget.options].some((o) => o.value === prev) ? prev : 'all';
   updateComposerHint();
 }
 
 function updateComposerHint() {
-  const target = dom.orchTarget.value;
-  dom.composerHint.textContent = target === 'all'
-    ? `relays to ${panes.size} pane(s)`
-    : `relays to ${target} only`;
+  const t = dom.orchTarget.value;
+  const alive = [...panes.values()].filter((e) => e.pane.alive).length;
+  dom.composerHint.textContent = t === 'all' ? `relays to ${alive} pane(s)` : `relays to ${t} only`;
 }
 
-// --------------------------------------------------------------------------
-// logs
+// ---------------------------------------------------------------- logs
 
 function renderOrchEntry(entry) {
   const node = document.createElement('div');
   node.className = 'entry';
   node.dataset.role = entry.role;
-
   const head = document.createElement('div');
   head.className = 'entry-head';
   const who = document.createElement('span');
@@ -287,18 +355,11 @@ function renderOrchEntry(entry) {
   const when = document.createElement('span');
   when.textContent = time(entry.ts);
   head.append(who, when);
-  if (entry.to) {
-    const to = document.createElement('span');
-    to.textContent = `-> ${entry.to}`;
-    head.append(to);
-  }
-
+  if (entry.to) { const to = document.createElement('span'); to.textContent = `-> ${entry.to}`; head.append(to); }
   const body = document.createElement('div');
   body.className = 'entry-body';
   body.textContent = entry.text;
-
   node.append(head, body);
-
   if (Array.isArray(entry.deliveries) && entry.deliveries.length > 0) {
     const receipts = document.createElement('div');
     receipts.className = 'receipts';
@@ -306,14 +367,11 @@ function renderOrchEntry(entry) {
       const chip = document.createElement('span');
       chip.className = 'receipt';
       chip.dataset.ok = String(Boolean(d.ok));
-      chip.textContent = d.ok
-        ? `${d.target} ${d.channel}`
-        : `${d.target} failed: ${d.reason ?? '?'}`;
+      chip.textContent = d.ok ? `${d.target} ${d.channel}` : `${d.target} failed: ${d.reason ?? '?'}`;
       receipts.append(chip);
     }
     node.append(receipts);
   }
-
   appendTo(dom.orchLog, node);
 }
 
@@ -321,7 +379,6 @@ function renderSharedMessage(msg) {
   const node = document.createElement('div');
   node.className = 'entry';
   node.dataset.role = msg.from === 'orchestrator' ? 'orchestrator' : 'pane';
-
   const head = document.createElement('div');
   head.className = 'entry-head';
   const who = document.createElement('span');
@@ -332,106 +389,69 @@ function renderSharedMessage(msg) {
   const kind = document.createElement('span');
   kind.textContent = msg.kind;
   head.append(who, when, kind);
-
   const body = document.createElement('div');
   body.className = 'entry-body';
   body.textContent = msg.text;
-
   node.append(head, body);
   appendTo(dom.sharedLog, node);
 }
 
 const TRACE_SKIP = new Set(['seq', 'id', 'ts', 'kind']);
-
 function traceRow(event) {
   const row = document.createElement('div');
   row.className = 'trace-row';
   row.dataset.kind = event.kind;
-
-  const when = document.createElement('span');
-  when.className = 'trace-time';
-  when.textContent = time(event.ts);
-
-  const kind = document.createElement('span');
-  kind.className = 'trace-kind';
-  kind.textContent = event.kind;
-
-  const detail = document.createElement('span');
-  detail.className = 'trace-detail';
-  detail.textContent = Object.entries(event)
-    .filter(([key]) => !TRACE_SKIP.has(key))
-    .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
-    .join('  ');
-
+  const when = document.createElement('span'); when.className = 'trace-time'; when.textContent = time(event.ts);
+  const kind = document.createElement('span'); kind.className = 'trace-kind'; kind.textContent = event.kind;
+  const detail = document.createElement('span'); detail.className = 'trace-detail';
+  detail.textContent = Object.entries(event).filter(([k]) => !TRACE_SKIP.has(k))
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join('  ');
   row.append(when, kind, detail);
   return row;
 }
 
 function traceMatches(event, needle) {
   if (!needle) return true;
-  const text = `${event.kind} ${JSON.stringify(event)}`.toLowerCase();
-  return text.includes(needle.toLowerCase());
+  return `${event.kind} ${JSON.stringify(event)}`.toLowerCase().includes(needle.toLowerCase());
 }
 
 function pushTrace(event) {
   traceEvents.push(event);
   if (traceEvents.length > 3000) traceEvents.shift();
-
   appendTo(dom.traceLog, traceRow(event), 800);
-  if (traceMatches(event, dom.traceFilter.value.trim())) {
-    appendTo(dom.orchTrace, traceRow(event), 800);
-  }
+  if (traceMatches(event, dom.traceFilter.value.trim())) appendTo(dom.orchTrace, traceRow(event), 800);
 }
 
 function rebuildFilteredTrace() {
   const needle = dom.traceFilter.value.trim();
   dom.orchTrace.textContent = '';
-  for (const event of traceEvents.slice(-800)) {
-    if (traceMatches(event, needle)) dom.orchTrace.append(traceRow(event));
-  }
+  for (const e of traceEvents.slice(-800)) if (traceMatches(e, needle)) dom.orchTrace.append(traceRow(e));
   dom.orchTrace.scrollTop = dom.orchTrace.scrollHeight;
 }
 
-/** Bump a pane's unread badge when a message is pushed to it. */
 function noteDelivery(delivery) {
   const entry = panes.get(delivery.target);
   if (!entry || !delivery.ok) return;
-  if (delivery.channel === 'cli') {
-    entry.unread = 0;
-  } else if (delivery.target !== focusedPane) {
-    entry.unread += 1;
-  }
-  renderUnread(entry);
+  if (delivery.channel === 'cli') entry.unread = 0;
+  else if (delivery.target !== focusedPane) entry.unread += 1;
+  renderUnread(entry); renderFleet(); updateVitals();
 }
 
-// --------------------------------------------------------------------------
-// websocket
+// ---------------------------------------------------------------- websocket
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
-
-  ws.addEventListener('open', () => {
-    reconnectDelay = 500;
-    setStatus('connected', 'live');
-  });
-
+  ws.addEventListener('open', () => { reconnectDelay = 500; setStatus('connected', 'live'); });
   ws.addEventListener('message', (event) => {
-    let frame;
-    try {
-      frame = JSON.parse(event.data);
-    } catch {
-      return;
-    }
+    let frame; try { frame = JSON.parse(event.data); } catch { return; }
     handleFrame(frame);
   });
-
   ws.addEventListener('close', () => {
-    setStatus(`disconnected · retrying in ${Math.round(reconnectDelay / 100) / 10}s`, 'down');
+    setStatus(`disconnected · retry ${Math.round(reconnectDelay / 100) / 10}s`, 'down');
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(8000, reconnectDelay * 2);
   });
-
   ws.addEventListener('error', () => setStatus('connection error', 'down'));
 }
 
@@ -439,112 +459,178 @@ function handleFrame(frame) {
   switch (frame.type) {
     case 'hello': {
       syncPaneList(frame.panes ?? []);
-      for (const msg of frame.transcript ?? []) renderSharedMessage(msg);
-      for (const entry of frame.orchestrator ?? []) renderOrchEntry(entry);
-      for (const event of frame.trace ?? []) pushTrace(event);
+      for (const m of frame.transcript ?? []) renderSharedMessage(m);
+      for (const e of frame.orchestrator ?? []) renderOrchEntry(e);
+      for (const e of frame.trace ?? []) pushTrace(e);
       applyStatus(frame.status);
       break;
     }
-    case 'pane.list':
-      syncPaneList(frame.panes ?? []);
-      break;
-    case 'pane.created':
-      mountPane(frame.pane);
-      focusPane(frame.pane.id);
-      break;
+    case 'pane.list': syncPaneList(frame.panes ?? []); break;
+    case 'pane.created': mountPane(frame.pane); focusPane(frame.pane.id); break;
     case 'pane.data': {
       const entry = panes.get(frame.paneId);
-      if (entry && frame.data) entry.term.write(frame.data);
+      if (entry && frame.data) {
+        entry.term.write(frame.data);
+        entry.lastOutputAt = Date.now();
+        if (!frame.replay) scheduleFleetRefresh();
+      }
       break;
     }
     case 'pane.exit': {
       const entry = panes.get(frame.paneId);
       if (entry) {
         entry.node.dataset.alive = 'false';
-        entry.term.write(`\r\n\u001b[2m[pane exited: code ${frame.exit?.code ?? '?'}]\u001b[0m\r\n`);
+        entry.term.write(`\r\n[2m[pane exited: code ${frame.exit?.code ?? '?'}][0m\r\n`);
       }
-      syncTargets();
+      syncTargets(); renderFleet(); updateVitals();
       break;
     }
-    case 'message':
-      renderSharedMessage(frame.message);
-      break;
-    case 'delivery':
-      noteDelivery(frame.delivery);
-      break;
-    case 'trace':
-      pushTrace(frame.event);
-      break;
-    case 'orch.reply':
-      renderOrchEntry(frame.entry);
-      break;
-    case 'error':
-      setStatus(`error: ${frame.error}`, 'down');
-      break;
-    default:
-      break;
+    case 'message': renderSharedMessage(frame.message); break;
+    case 'delivery': noteDelivery(frame.delivery); break;
+    case 'trace': pushTrace(frame.event); break;
+    case 'orch.reply': renderOrchEntry(frame.entry); break;
+    case 'error': setStatus(`error: ${frame.error}`, 'down'); break;
+    default: break;
   }
+}
+
+let fleetTimer = null;
+function scheduleFleetRefresh() {
+  if (fleetTimer) return;
+  fleetTimer = setTimeout(() => { fleetTimer = null; renderFleet(); updateVitals(); }, 800);
 }
 
 function applyStatus(status) {
   if (!status) return;
-  const mode = status.orchestrator?.mode ?? 'manual';
-  dom.orchMode.textContent = status.orchestrator?.model
-    ? `${mode} · ${status.orchestrator.model}`
-    : mode;
-  dom.orchMode.dataset.mode = mode;
-  setStatus(`${status.panes?.alive ?? 0} pane(s) · ${status.traceEvents ?? 0} trace events`, 'live');
+  setStatus(`${status.panes?.alive ?? 0} pane(s) · ${status.traceEvents ?? 0} events`, 'live');
 }
 
-// --------------------------------------------------------------------------
-// wiring
+// ---------------------------------------------------------------- palette
+
+const COMMANDS = [
+  { id: 'new-pane', label: 'New CLI pane', hint: 'display', run: () => addPane('display') },
+  { id: 'new-pane-stdin', label: 'New CLI pane (stdin mode)', hint: 'stdin', run: () => addPane('stdin') },
+  { id: 'toggle-orch', label: 'Toggle orchestrator', hint: 'Ctrl+J', run: () => setOrchOpen(dom.orch.dataset.open !== 'true') },
+  { id: 'toggle-trace', label: 'Toggle activity trace', hint: 'Ctrl+Shift+T', run: () => setTraceOpen(dom.traceDrawer.dataset.open !== 'true') },
+  { id: 'toggle-sidebar', label: 'Toggle sidebar', hint: 'Ctrl+B', run: () => toggleSidebar() },
+  { id: 'new-workspace', label: 'New workspace', run: () => addWorkspace() },
+];
+
+let paletteIndex = 0;
+
+function paletteCommands() {
+  const q = dom.paletteInput.value.trim().toLowerCase();
+  const paneItems = [...panes.values()].map((e) => ({
+    id: `focus-${e.pane.id}`,
+    label: `Focus pane ${e.pane.id} · ${e.pane.label}`,
+    hint: e.pane.deliveryMode,
+    run: () => { focusPane(e.pane.id); e.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); },
+  }));
+  return [...COMMANDS, ...paneItems].filter((c) => !q || c.label.toLowerCase().includes(q));
+}
+
+function renderPalette() {
+  const items = paletteCommands();
+  paletteIndex = Math.min(paletteIndex, Math.max(0, items.length - 1));
+  dom.paletteList.textContent = '';
+  items.forEach((cmd, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'palette-item';
+    b.dataset.active = String(i === paletteIndex);
+    const label = document.createElement('span'); label.textContent = cmd.label;
+    const hint = document.createElement('span'); hint.className = 'pi-hint'; hint.textContent = cmd.hint ?? '';
+    b.append(label, hint);
+    b.addEventListener('click', () => { closePalette(); cmd.run(); });
+    b.addEventListener('mousemove', () => { paletteIndex = i; renderPaletteActive(); });
+    dom.paletteList.append(b);
+  });
+}
+
+function renderPaletteActive() {
+  [...dom.paletteList.children].forEach((n, i) => { n.dataset.active = String(i === paletteIndex); });
+}
+
+function openPalette() {
+  dom.palette.hidden = false;
+  paletteIndex = 0;
+  dom.paletteInput.value = '';
+  renderPalette();
+  dom.paletteInput.focus();
+}
+
+function closePalette() { dom.palette.hidden = true; }
+
+dom.paletteInput.addEventListener('input', () => { paletteIndex = 0; renderPalette(); });
+dom.paletteInput.addEventListener('keydown', (e) => {
+  const items = paletteCommands();
+  if (e.key === 'ArrowDown') { e.preventDefault(); paletteIndex = Math.min(items.length - 1, paletteIndex + 1); renderPaletteActive(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIndex = Math.max(0, paletteIndex - 1); renderPaletteActive(); }
+  else if (e.key === 'Enter') { e.preventDefault(); const cmd = items[paletteIndex]; if (cmd) { closePalette(); cmd.run(); } }
+  else if (e.key === 'Escape') closePalette();
+});
+dom.palette.addEventListener('click', (e) => { if (e.target === dom.palette) closePalette(); });
+dom.openPalette.addEventListener('click', openPalette);
+
+// ---------------------------------------------------------------- actions
+
+function addPane(mode) {
+  send({ type: WS_CLIENT.PANE_CREATE, spec: { deliveryMode: mode ?? dom.newPaneMode.value } });
+}
+
+function addWorkspace() {
+  const name = `ws-${workspaces.size + 1}`;
+  workspaces.set(name, { name, panes: [] });
+  activeWorkspace = name;
+  dom.wsName.textContent = name;
+  renderWorkspaces();
+}
+
+function toggleSidebar() {
+  const hidden = dom.sidebar.style.display === 'none';
+  dom.sidebar.style.display = hidden ? '' : 'none';
+  dom.sidebarRail.hidden = hidden;
+  setTimeout(fitAll, 170);
+}
 
 function setOrchOpen(open) {
   dom.orch.dataset.open = String(open);
   dom.body.dataset.orch = String(open);
   dom.toggleOrch.setAttribute('aria-pressed', String(open));
-  // The grid just changed width, so every terminal needs to re-fit.
-  setTimeout(fitAll, 200);
+  setTimeout(fitAll, 170);
   if (open) dom.orchInput.focus();
 }
 
 function setTraceOpen(open) {
   dom.traceDrawer.dataset.open = String(open);
-  dom.body.dataset.trace = String(open);
   dom.toggleTrace.setAttribute('aria-pressed', String(open));
-  setTimeout(fitAll, 200);
+  setTimeout(fitAll, 170);
 }
 
-function fitAll() {
-  for (const entry of panes.values()) fitPane(entry);
-}
+function fitAll() { for (const entry of panes.values()) fitPane(entry); }
 
-function addPane() {
-  send({
-    type: WS_CLIENT.PANE_CREATE,
-    spec: { deliveryMode: dom.newPaneMode.value },
-  });
-}
+// ---------------------------------------------------------------- wiring
 
-dom.addPane.addEventListener('click', addPane);
-dom.emptyAdd.addEventListener('click', addPane);
-
+dom.addPane.addEventListener('click', () => addPane());
+dom.emptyAdd.addEventListener('click', () => addPane());
+dom.wsAdd.addEventListener('click', addWorkspace);
+dom.sidebarHide.addEventListener('click', toggleSidebar);
+dom.sidebarRail.addEventListener('click', toggleSidebar);
 dom.toggleOrch.addEventListener('click', () => setOrchOpen(dom.orch.dataset.open !== 'true'));
 dom.closeOrch.addEventListener('click', () => setOrchOpen(false));
 dom.toggleTrace.addEventListener('click', () => setTraceOpen(dom.traceDrawer.dataset.open !== 'true'));
 dom.closeTrace.addEventListener('click', () => setTraceOpen(false));
-
 dom.orchTarget.addEventListener('change', updateComposerHint);
 dom.traceFilter.addEventListener('input', rebuildFilteredTrace);
 
-for (const tab of document.querySelectorAll('.tab')) {
+for (const tab of document.querySelectorAll('.dtab')) {
   tab.addEventListener('click', () => {
-    for (const other of document.querySelectorAll('.tab')) {
+    for (const other of document.querySelectorAll('.dtab')) {
       const active = other === tab;
       other.classList.toggle('is-active', active);
       other.setAttribute('aria-selected', String(active));
     }
-    for (const panel of document.querySelectorAll('.tab-panel')) {
+    for (const panel of document.querySelectorAll('.dpanel')) {
       panel.classList.toggle('is-active', panel.dataset.panel === tab.dataset.tab);
     }
   });
@@ -557,44 +643,29 @@ function submitOrch() {
   dom.orchInput.value = '';
 }
 
-dom.orchForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  submitOrch();
+dom.orchForm.addEventListener('submit', (e) => { e.preventDefault(); submitOrch(); });
+dom.orchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitOrch(); }
 });
 
-dom.orchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    submitOrch();
-  }
-});
-
-// Ctrl/Cmd+J toggles the orchestrator; Ctrl/Cmd+Shift+T the trace drawer.
-window.addEventListener('keydown', (event) => {
-  if (!(event.ctrlKey || event.metaKey)) return;
-  const key = event.key.toLowerCase();
-  if (key === 'j') {
-    event.preventDefault();
-    setOrchOpen(dom.orch.dataset.open !== 'true');
-  } else if (key === 't' && event.shiftKey) {
-    event.preventDefault();
-    setTraceOpen(dom.traceDrawer.dataset.open !== 'true');
-  }
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const key = e.key.toLowerCase();
+  if (key === 'k') { e.preventDefault(); dom.palette.hidden ? openPalette() : closePalette(); }
+  else if (key === 'j') { e.preventDefault(); setOrchOpen(dom.orch.dataset.open !== 'true'); }
+  else if (key === 'b') { e.preventDefault(); toggleSidebar(); }
+  else if (key === 't' && e.shiftKey) { e.preventDefault(); setTraceOpen(dom.traceDrawer.dataset.open !== 'true'); }
 });
 
 let resizeTimer = null;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(fitAll, 120);
-});
-
-// Re-fit when the grid itself reflows (a pane added, the drawer opened).
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitAll, 120); });
 if (typeof ResizeObserver === 'function') {
-  new ResizeObserver(() => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(fitAll, 120);
-  }).observe(dom.grid);
+  new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitAll, 120); }).observe(dom.grid);
 }
 
+// working/idle dots move on a clock even when nothing else happens
+setInterval(() => { renderFleet(); updateVitals(); }, 3000);
+
+renderWorkspaces();
 refreshEmpty();
 connect();

@@ -5,98 +5,125 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>clihive</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' fill='%23e8a33d'/%3E%3C/svg%3E" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' fill='%23e8a33d'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
 <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
 <div id="app" class="shell">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">clihive</span>
-    </div>
 
-    <div class="topbar-actions">
-      <button id="add-pane" class="btn" type="button">+ CLI pane</button>
-      <label class="field">
-        <span class="field-label">delivery</span>
-        <select id="new-pane-mode" class="select">
-          <option value="display">display (safe for shells)</option>
-          <option value="stdin">stdin (agent CLIs)</option>
-        </select>
-      </label>
-      <button id="toggle-trace" class="btn btn-quiet" type="button" aria-pressed="false">Trace</button>
-      <button id="toggle-orch" class="btn btn-accent" type="button" aria-pressed="false" aria-controls="orchestrator">
-        Orchestrator
+  <!-- 36px custom titlebar. Center is the drag region. -->
+  <header class="titlebar">
+    <div class="titlebar-mantle">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="app-name">clihive</span>
+      <span class="ws-name" id="ws-name">main</span>
+    </div>
+    <div class="titlebar-drag"></div>
+    <div class="titlebar-status">
+      <button class="vital" id="vital-running" hidden type="button" title="Jump to a running pane">
+        <span class="vital-dot dot-running"></span><span id="vital-running-n">0</span> running
       </button>
+      <button class="vital" id="vital-attention" hidden type="button" title="Jump to a pane that needs you">
+        <span class="vital-dot dot-attention"></span><span id="vital-attention-n">0</span> need you
+      </button>
+      <span class="conn" id="status" data-state="">connecting…</span>
     </div>
-
-    <div class="status" id="status" role="status">connecting…</div>
   </header>
 
-  <main class="body">
-    <section class="grid-wrap">
-      <div id="grid" class="grid" aria-label="CLI panes"></div>
-      <p id="grid-empty" class="empty">
+  <div class="body" id="body">
+
+    <!-- 240px left sidebar: navigation only. -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="section-label">Workspaces</span>
+        <button class="icon-btn" id="ws-add" type="button" title="New workspace">+</button>
+      </div>
+      <nav class="ws-list" id="ws-list" aria-label="Workspaces"></nav>
+      <div class="sidebar-foot">
+        <span id="ws-count">1 workspace</span>
+        <button class="icon-btn" id="sidebar-hide" type="button" title="Hide sidebar">&#8249;</button>
+      </div>
+    </aside>
+
+    <!-- Collapsed sidebar rail. -->
+    <button class="sidebar-rail" id="sidebar-rail" type="button" title="Show sidebar" hidden>&#8250;</button>
+
+    <!-- The hero: the terminal grid gets the largest area. -->
+    <section class="hero">
+      <div class="hero-toolbar">
+        <button class="tbtn" id="add-pane" type="button">+ pane</button>
+        <select id="new-pane-mode" class="mini-select" title="Delivery mode">
+          <option value="display">display</option>
+          <option value="stdin">stdin</option>
+        </select>
+        <span class="hero-spacer"></span>
+        <button class="tbtn" id="open-palette" type="button" title="Command palette (Ctrl+K)">&#8984;K</button>
+        <button class="tbtn" id="toggle-trace" type="button" aria-pressed="false">trace</button>
+        <button class="tbtn tbtn-accent" id="toggle-orch" type="button" aria-pressed="false">orchestrator</button>
+      </div>
+      <div class="grid" id="grid" aria-label="CLI panes"></div>
+      <p class="empty" id="grid-empty">
         No panes yet. <button class="link" id="empty-add" type="button">Open the first CLI pane</button>.
       </p>
     </section>
 
-    <!-- The hideable big window on the right. -->
-    <aside id="orchestrator" class="orchestrator" aria-label="Orchestrator" data-open="false">
-      <div class="orch-head">
-        <div class="orch-title">
-          <strong>Orchestrator</strong>
-          <span id="orch-mode" class="pill">manual</span>
-        </div>
-        <button id="close-orch" class="icon-btn" type="button" aria-label="Hide orchestrator">&times;</button>
-      </div>
-
-      <nav class="tabs" role="tablist">
-        <button class="tab is-active" data-tab="chat" role="tab" aria-selected="true">Chat</button>
-        <button class="tab" data-tab="shared" role="tab" aria-selected="false">Shared transcript</button>
-        <button class="tab" data-tab="trace" role="tab" aria-selected="false">Trace</button>
+    <!-- Right mission-control pillar: Fleet roster + Orchestrator + tabs. -->
+    <aside class="deck" id="orchestrator" data-open="false" aria-label="Mission control">
+      <nav class="deck-tabs" role="tablist">
+        <button class="dtab is-active" data-tab="orch" role="tab" aria-selected="true" title="Orchestrator">&#9638;</button>
+        <button class="dtab" data-tab="shared" role="tab" aria-selected="false" title="Shared transcript">&#9776;</button>
+        <button class="dtab" data-tab="trace" role="tab" aria-selected="false" title="Trace">&#9881;</button>
+        <span class="deck-tabs-spacer"></span>
+        <button class="icon-btn" id="close-orch" type="button" aria-label="Hide panel">&times;</button>
       </nav>
 
-      <div class="tab-panels">
-        <div class="tab-panel is-active" data-panel="chat" role="tabpanel">
-          <div id="orch-log" class="log" aria-live="polite"></div>
+      <!-- Fleet roster: status dot + name + activity + jump. -->
+      <div class="fleet" id="fleet">
+        <div class="fleet-head"><span class="section-label" id="fleet-label">Fleet &middot; 0</span></div>
+        <div class="fleet-list" id="fleet-list"></div>
+      </div>
+
+      <div class="deck-panels">
+        <div class="dpanel is-active" data-panel="orch" role="tabpanel">
+          <div class="log" id="orch-log" aria-live="polite"></div>
         </div>
-        <div class="tab-panel" data-panel="shared" role="tabpanel">
-          <div id="shared-log" class="log"></div>
+        <div class="dpanel" data-panel="shared" role="tabpanel">
+          <div class="log" id="shared-log"></div>
         </div>
-        <div class="tab-panel" data-panel="trace" role="tabpanel">
-          <div class="trace-filter">
-            <input id="trace-filter" class="input" type="search" placeholder="filter: msg. / pane. / orch. / a pane id" />
-          </div>
-          <div id="orch-trace" class="log log-trace"></div>
+        <div class="dpanel" data-panel="trace" role="tabpanel">
+          <div class="trace-filter"><input class="input" id="trace-filter" type="search" placeholder="filter: msg. / pane. / orch." /></div>
+          <div class="log log-trace" id="orch-trace"></div>
         </div>
       </div>
 
-      <form id="orch-form" class="composer">
+      <form class="composer" id="orch-form">
         <div class="composer-row">
-          <select id="orch-target" class="select" aria-label="Target">
-            <option value="all">all panes</option>
-          </select>
+          <select class="mini-select" id="orch-target" aria-label="Target"><option value="all">all panes</option></select>
           <span class="composer-hint" id="composer-hint">relays to every pane</span>
         </div>
-        <textarea id="orch-input" class="textarea" rows="3"
-          placeholder="Talk to the hive…  (Enter to send, Shift+Enter for a newline)"></textarea>
-        <button class="btn btn-accent btn-block" type="submit">Send</button>
+        <textarea class="textarea" id="orch-input" rows="3" placeholder="Talk to the hive&hellip; (Enter to send)"></textarea>
+        <button class="btn-primary" type="submit">Send</button>
       </form>
     </aside>
+  </div>
 
-    <!-- Bottom trace drawer: the whole-window activity feed. -->
-    <section id="trace-drawer" class="trace-drawer" data-open="false" aria-label="Activity trace">
-      <div class="drawer-head">
-        <strong>Activity trace</strong>
-        <span class="drawer-hint">every message, every delivery, every ack</span>
-        <button id="close-trace" class="icon-btn" type="button" aria-label="Hide trace">&times;</button>
-      </div>
-      <div id="trace-log" class="log log-trace"></div>
-    </section>
-  </main>
+  <!-- Bottom trace drawer. -->
+  <section class="trace-drawer" id="trace-drawer" data-open="false" aria-label="Activity trace">
+    <div class="drawer-head">
+      <strong>Activity trace</strong>
+      <span class="drawer-hint">every message, every delivery, every ack</span>
+      <button class="icon-btn" id="close-trace" type="button" aria-label="Hide trace">&times;</button>
+    </div>
+    <div class="log log-trace" id="trace-log"></div>
+  </section>
+
+  <!-- Command palette. -->
+  <div class="palette" id="palette" hidden>
+    <div class="palette-box">
+      <input class="palette-input" id="palette-input" type="text" placeholder="Type a command or search panes&hellip;" autocomplete="off" />
+      <div class="palette-list" id="palette-list"></div>
+    </div>
+  </div>
 </div>
 
 <script src="/vendor/xterm/lib/xterm.js"></script>
