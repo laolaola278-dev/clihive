@@ -60,6 +60,8 @@ const dom = {
   closeSettings: $('close-settings'),
   setTheme: $('set-theme'),
   setBg: $('set-bg'),
+  setBgFit: $('set-bg-fit'),
+  setBgFit: $('set-bg-fit'),
   setBgOpacity: $('set-bg-opacity'),
   setScanlines: $('set-scanlines'),
   setGlow: $('set-glow'),
@@ -655,9 +657,9 @@ const settings = loadSettings();
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { theme: 'amber', bgImage: null, bgOpacity: 35, scanlines: false, glow: true, ...JSON.parse(raw) };
+    if (raw) return { theme: 'amber', bgImage: null, bgOpacity: 35, bgFit: 'cover', scanlines: false, glow: true, ...JSON.parse(raw) };
   } catch { /* corrupt state falls through to defaults */ }
-  return { theme: 'amber', bgImage: null, bgOpacity: 35, scanlines: false, glow: true };
+  return { theme: 'amber', bgImage: null, bgOpacity: 35, bgFit: 'cover', scanlines: false, glow: true };
 }
 
 function saveSettings() {
@@ -677,6 +679,9 @@ function applySettings() {
     bgLayer.style.backgroundImage = '';
     document.body.classList.remove('has-bg');
   }
+  // contain = whole image visible (letterboxed), good for 16:9 wallpapers
+  bgLayer.style.backgroundSize = settings.bgFit === 'fill' ? '100% 100%' : settings.bgFit;
+  bgLayer.style.backgroundRepeat = 'no-repeat';
   document.documentElement.style.setProperty('--bg-img-strength', String(settings.bgOpacity));
 
   // live-swap terminal palettes
@@ -686,12 +691,14 @@ function applySettings() {
   // reflect into the controls
   dom.setTheme.value = settings.theme;
   dom.setBgOpacity.value = String(settings.bgOpacity);
+  dom.setBgFit.value = settings.bgFit;
   dom.setScanlines.checked = settings.scanlines;
   dom.setGlow.checked = settings.glow;
 }
 
 dom.setTheme.addEventListener('change', () => { settings.theme = dom.setTheme.value; saveSettings(); applySettings(); });
 dom.setBgOpacity.addEventListener('input', () => { settings.bgOpacity = Number(dom.setBgOpacity.value); saveSettings(); applySettings(); });
+dom.setBgFit.addEventListener('change', () => { settings.bgFit = dom.setBgFit.value; saveSettings(); applySettings(); });
 dom.setScanlines.addEventListener('change', () => { settings.scanlines = dom.setScanlines.checked; saveSettings(); applySettings(); });
 dom.setGlow.addEventListener('change', () => { settings.glow = dom.setGlow.checked; saveSettings(); applySettings(); });
 
