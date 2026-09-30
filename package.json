@@ -1,0 +1,26 @@
+{
+  "name": "clihive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A hive of CLI agents in one window: many small CLI panes, one hideable orchestrator, one shared transcript, and a full delivery trace.",
+  "license": "MIT",
+  "bin": {
+    "hive": "src/cli/hive.js"
+  },
+  "scripts": {
+    "start": "node src/server/index.js",
+    "desktop": "electron src/desktop/main.cjs",
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node scripts/syntax-check.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "node-pty": "1.1.0",
+    "ws": "8.22.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

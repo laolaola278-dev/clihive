@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>clihive</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' fill='%23e8a33d'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='3' width='10' height='10' fill='%23e8a33d'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/vendor/xterm/css/xterm.css" />
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<div id="app" class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">clihive</span>
+    </div>
+
+    <div class="topbar-actions">
+      <button id="add-pane" class="btn" type="button">+ CLI pane</button>
+      <label class="field">
+        <span class="field-label">delivery</span>
+        <select id="new-pane-mode" class="select">
+          <option value="display">display (safe for shells)</option>
+          <option value="stdin">stdin (agent CLIs)</option>
+        </select>
+      </label>
+      <button id="toggle-trace" class="btn btn-quiet" type="button" aria-pressed="false">Trace</button>
+      <button id="toggle-orch" class="btn btn-accent" type="button" aria-pressed="false" aria-controls="orchestrator">
+        Orchestrator
+      </button>
+    </div>
+
+    <div class="status" id="status" role="status">connecting…</div>
+  </header>
+
+  <main class="body">
+    <section class="grid-wrap">
+      <div id="grid" class="grid" aria-label="CLI panes"></div>
+      <p id="grid-empty" class="empty">
+        No panes yet. <button class="link" id="empty-add" type="button">Open the first CLI pane</button>.
+      </p>
+    </section>
+
+    <!-- The hideable big window on the right. -->
+    <aside id="orchestrator" class="orchestrator" aria-label="Orchestrator" data-open="false">
+      <div class="orch-head">
+        <div class="orch-title">
+          <strong>Orchestrator</strong>
+          <span id="orch-mode" class="pill">manual</span>
+        </div>
+        <button id="close-orch" class="icon-btn" type="button" aria-label="Hide orchestrator">&times;</button>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab is-active" data-tab="chat" role="tab" aria-selected="true">Chat</button>
+        <button class="tab" data-tab="shared" role="tab" aria-selected="false">Shared transcript</button>
+        <button class="tab" data-tab="trace" role="tab" aria-selected="false">Trace</button>
+      </nav>
+
+      <div class="tab-panels">
+        <div class="tab-panel is-active" data-panel="chat" role="tabpanel">
+          <div id="orch-log" class="log" aria-live="polite"></div>
+        </div>
+        <div class="tab-panel" data-panel="shared" role="tabpanel">
+          <div id="shared-log" class="log"></div>
+        </div>
+        <div class="tab-panel" data-panel="trace" role="tabpanel">
+          <div class="trace-filter">
+            <input id="trace-filter" class="input" type="search" placeholder="filter: msg. / pane. / orch. / a pane id" />
+          </div>
+          <div id="orch-trace" class="log log-trace"></div>
+        </div>
+      </div>
+
+      <form id="orch-form" class="composer">
+        <div class="composer-row">
+          <select id="orch-target" class="select" aria-label="Target">
+            <option value="all">all panes</option>
+          </select>
+          <span class="composer-hint" id="composer-hint">relays to every pane</span>
+        </div>
+        <textarea id="orch-input" class="textarea" rows="3"
+          placeholder="Talk to the hive…  (Enter to send, Shift+Enter for a newline)"></textarea>
+        <button class="btn btn-accent btn-block" type="submit">Send</button>
+      </form>
+    </aside>
+
+    <!-- Bottom trace drawer: the whole-window activity feed. -->
+    <section id="trace-drawer" class="trace-drawer" data-open="false" aria-label="Activity trace">
+      <div class="drawer-head">
+        <strong>Activity trace</strong>
+        <span class="drawer-hint">every message, every delivery, every ack</span>
+        <button id="close-trace" class="icon-btn" type="button" aria-label="Hide trace">&times;</button>
+      </div>
+      <div id="trace-log" class="log log-trace"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/vendor/xterm/lib/xterm.js"></script>
+<script src="/vendor/addon-fit/lib/addon-fit.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
