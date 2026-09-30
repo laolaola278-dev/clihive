@@ -7,13 +7,20 @@ pane can read, and every delivery is traced, so you can always answer:
 *did that pane actually receive it?*
 
 ```
-┌──────────┬──────────┬──────────────┐
-│  cli-1   │  cli-2   │              │
-├──────────┼──────────┤  ORCHESTRATOR│
-│  cli-3   │  cli-4   │  (hideable)  │
-├──────────┴──────────┤              │
-│  activity trace     │  chat/shared │
-└─────────────────────┴──────────────┘
+┌─────────────────────────── titlebar 36px ────────────────────────────┐
+├──────────┬───────────────────────────────────┬───────────────────────┤
+│          │  toolbar: + pane · mode · ⌘K · ⟳  │ Fleet · 3             │
+│  sidebar │                                   │  ● p1 cli-1  working →│
+│  240px   │   ┌─────────┐   ┌─────────┐       │  ● p2 cli-2  idle    →│
+│ workspaces  │  cli-1   │   │  cli-2   │       │  ● p3 cli-3  2 unread→│
+│          │   ├─────────┤   ├─────────┤       ├───────────────────────┤
+│          │   │  cli-3   │   │  cli-4   │       │ Orchestrator          │
+│          │   └─────────┘   └─────────┘       │ (chat|shared|trace)   │
+│          │        hero terminal grid          ├───────────────────────┤
+│          │                                   │ composer → all panes  │
+├──────────┴───────────────────────────────────┴───────────────────────┤
+│  activity trace drawer (Ctrl+Shift+T)                                │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## What it does
@@ -29,6 +36,48 @@ pane can read, and every delivery is traced, so you can always answer:
 - **A delivery trace.** Send → fanout → deliver → ack, recorded as JSONL and
   streamed to the trace views. The trace is the observability contract: it
   names the channel, the target, and whether it landed.
+
+## The window
+
+The layout keeps the terminals as the hero and pushes chrome to the edges:
+
+- **Titlebar (36px).** Workspace name, live vitals (`N running`, `N need you` —
+  shown only when non-zero, click to jump to the pane) and connection state.
+- **Sidebar (240px).** Workspaces only. Collapsible with Ctrl/Cmd+B; a rail
+  button brings it back.
+- **Hero.** The pane grid. The focused pane carries a steel-blue top edge and
+  glow so you can find it without reading labels. Panes tile responsively.
+- **Mission-control deck (right, 326px).** Tabs across the top. The **Fleet**
+  roster sits above the orchestrator thread: one row per pane with a status dot
+  (amber = working, green = idle, grey = exited, red = needs you), a monospace
+  activity line and a `→` jump affordance. Rows needing attention sort to the
+  top. Other tabs: shared transcript and the activity trace (filterable).
+- **Command palette (Ctrl/Cmd+K).** Fuzzy search over commands and panes:
+  spawn a pane, switch theme, toggle panels, jump to a pane.
+- **Trace drawer (Ctrl/Cmd+Shift+T).** The full event stream along the bottom.
+
+### Colour grammar
+
+Two accents only, so state is legible at a glance: **amber** means alive /
+action / needs attention (running dots, primary button, cursor, unread count);
+**steel blue** means navigation / focus (focused pane edge, active tab, links,
+focus ring). Everything else is warm graphite.
+
+### Appearance
+
+The ⚙ button in the titlebar (or `Appearance settings` in the palette) opens
+the settings popover. Choices persist in `localStorage` and survive reloads:
+
+| setting | options |
+|---------|---------|
+| **Theme** | `Amber graphite` (default warm neutral) · `Matrix` (phosphor green `#00FF41` + cyan) · `Void` (colourless near-black) |
+| **Background image** | import any image up to 8 MB; stored as a data URL. Panels turn translucent so it reads through. |
+| **Image fit** | `Fill` (cover, crop to window) · `Fit whole image` (letterboxed — use this for 16:9 wallpapers) · `Stretch` |
+| **Image strength** | how far the image shows through the UI (0–70%) |
+| **CRT scanlines** | 1px scanline overlay across the whole window |
+| **Glow effects** | light bloom on running dots, the focused pane edge and (in Matrix) a slow CRT flicker; honours `prefers-reduced-motion` |
+
+Switching theme re-paints every open terminal's palette live — no pane restart.
 
 ## Delivery: how a message actually reaches a pane
 
@@ -87,10 +136,36 @@ The orchestrator runs in one of two modes:
 
 | keys | action |
 |------|--------|
+| Ctrl/Cmd + K | command palette (commands + jump to pane) |
 | Ctrl/Cmd + J | toggle the orchestrator window |
+| Ctrl/Cmd + B | toggle the workspace sidebar |
 | Ctrl/Cmd + Shift + T | toggle the activity trace drawer |
 | Enter (in composer) | send |
 | Shift + Enter | newline |
+| Esc | close the palette / settings popover |
+
+## HTTP API
+
+Every route is loopback-only and needs the startup token (`Authorization: Bearer`,
+`?token=`, or `x-clihive-token`). The `hive` CLI is a thin wrapper over these.
+
+| route | method | purpose |
+|-------|--------|---------|
+| `/api/send` | POST | publish a message; returns `messageId` + per-target delivery receipts |
+| `/api/inbox?pane=p1[&peek=1]` | GET/POST | drain (or peek) a pane's pending messages; draining emits `msg.ack` |
+| `/api/transcript[?pane=p1][&limit=50]` | GET | shared transcript, whole hive or one pane |
+| `/api/panes` | GET / POST | list panes / spawn one (`{command,args,cwd,deliveryMode,label}`) |
+| `/api/panes/:id` | DELETE | kill a pane |
+| `/api/trace[?message=][?prefix=][?limit=200]` | GET | trace events, all / one message / one kind prefix |
+| `/api/delivery?message=msg_xxx` | GET | full delivery report: pushed, acked, channels, reasons |
+| `/api/orchestrator[?limit=100]` | GET | orchestrator status + recent turns |
+| `/api/orchestrator/ask` | POST | `{text, to}` — relay or ask the model |
+| `/api/status` | GET | url, pane counts, orchestrator mode, client count, trace path |
+
+The window itself connects over WebSocket at `/ws` and receives `hello`,
+`pane.list`, `pane.created`, `pane.data`, `pane.exit`, `message`, `delivery`,
+`trace` and `orch.reply` frames; it sends `pane.create`, `pane.input`,
+`pane.resize`, `pane.kill`, `pane.subscribe`, `message.send` and `orch.ask`.
 
 ## Testing
 
