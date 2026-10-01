@@ -226,6 +226,41 @@ try {
   check(p1 !== null && orchBox !== null && p1.x + p1.width <= orchBox.x + 2,
     'grid reflowed beside the panel instead of being covered');
 
+  // --- workspaces are a real view filter ---------------------------------
+  const visiblePanes = () => page.evaluate(
+    () => [...document.querySelectorAll('.pane:not([hidden])')].map((n) => n.dataset.paneId),
+  );
+  check((await visiblePanes()).length === 2, 'both panes visible in the default workspace');
+
+  await page.click('#ws-add');
+  await page.waitForFunction(
+    () => document.getElementById('grid-empty-text')?.textContent === 'This workspace has no panes.',
+    null, { timeout: 5000 },
+  );
+  check((await visiblePanes()).length === 0, 'new workspace starts empty and filters the grid');
+
+  await page.click('#add-pane');
+  await page.waitForSelector('.pane[data-pane-id="p3"]', { timeout: 15000 });
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('.pane:not([hidden])')].length === 1, null, { timeout: 5000 },
+  );
+  check((await visiblePanes()).join(',') === 'p3', 'a pane spawned in the new workspace lands there only');
+
+  // Fleet must never hide a pane that lives in another workspace
+  const fleetRows = await page.locator('.fleet-row').count();
+  check(fleetRows === 3, `fleet still lists every pane across workspaces (${fleetRows})`);
+  const wsTag = await page.locator('.fleet-row .fleet-ws').first().textContent();
+  check(wsTag === 'main', `fleet tags panes from another workspace (${wsTag})`);
+
+  // jumping to a pane elsewhere switches the workspace first
+  await page.locator('.fleet-row', { hasText: 'cli-1' }).click();
+  await page.waitForFunction(
+    () => !document.querySelector('.pane[data-pane-id="p1"]').hidden
+      && document.querySelector('.pane[data-pane-id="p3"]').hidden,
+    null, { timeout: 5000 },
+  );
+  check((await visiblePanes()).sort().join(',') === 'p1,p2', 'fleet jump switched back to that pane\'s workspace');
+
   // --- appearance: theme + background (reload-sensitive, runs last) -------
   await page.click('#open-settings');
   await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });

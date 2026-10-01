@@ -199,6 +199,12 @@ body.glow-on[data-theme="matrix"] .pane-id { text-shadow: 0 0 8px rgba(var(--acc
 .ws-item:hover { background: rgba(var(--accent-blue-rgb), 0.08); color: var(--text-main); }
 .ws-item[data-active="true"] { background: rgba(var(--accent-blue-rgb), 0.14); color: var(--text-main); box-shadow: inset 2px 0 0 var(--accent-blue); }
 .ws-item .ws-count-panes { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+/* some pane in this workspace is waiting on you */
+.ws-item[data-attention="true"] > span:first-child::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--danger); margin-right: 6px; vertical-align: middle;
+  box-shadow: 0 0 5px var(--danger);
+}
 .sidebar-foot {
   display: flex; align-items: center; justify-content: space-between;
   height: var(--titlebar-h); padding: 0 12px;
@@ -262,6 +268,8 @@ body.glow-on[data-theme="matrix"] .pane-id { text-shadow: 0 0 8px rgba(var(--acc
   box-shadow: 0 0 8px rgba(var(--accent-blue-rgb), 0.5);
 }
 .pane[data-alive="false"] { opacity: 0.55; }
+/* the workspace filter hides panes; .pane is display:flex, so [hidden] needs this */
+.pane[hidden] { display: none; }
 
 .pane-head {
   display: flex; align-items: center; gap: 8px;
@@ -317,6 +325,12 @@ body.glow-on[data-theme="matrix"] .pane-id { text-shadow: 0 0 8px rgba(var(--acc
 .fleet-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .fleet-name { font-size: 12px; font-weight: 500; color: var(--text-main); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 0 auto; }
 .fleet-activity { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+/* pane lives in another workspace: tag where, and dim its name a little */
+.fleet-ws {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 9px; color: var(--accent-blue);
+  border: 1px solid rgba(var(--accent-blue-rgb), 0.35); border-radius: 3px; padding: 0 4px;
+}
+.fleet-row[data-elsewhere="true"] .fleet-name { color: var(--text-sub); }
 .fleet-row[data-attention="true"] .fleet-activity { color: var(--danger); }
 .fleet-jump { font-family: var(--mono); font-size: 11px; color: var(--text-muted); flex: 0 0 auto; }
 .fleet-row:hover .fleet-jump { color: var(--accent-blue); }

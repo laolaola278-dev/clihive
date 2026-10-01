@@ -25,6 +25,7 @@ const dom = {
   wsName: $('ws-name'),
   grid: $('grid'),
   gridEmpty: $('grid-empty'),
+  gridEmptyText: $('grid-empty-text'),
   status: $('status'),
   addPane: $('add-pane'),
   emptyAdd: $('empty-add'),
@@ -215,7 +216,7 @@ function mountPane(pane) {
   });
 
   requestAnimationFrame(() => { fitPane(entry); send({ type: WS_CLIENT.PANE_SUBSCRIBE, paneId: pane.id }); });
-  refreshEmpty(); syncTargets(); renderWorkspaces(); renderFleet();
+  applyWorkspaceFilter(); syncTargets(); renderWorkspaces(); renderFleet();
   if (!focusedPane) focusPane(pane.id);
   return entry;
 }
@@ -236,10 +237,13 @@ function dropPane(paneId) {
   for (const ws of workspaces.values()) ws.panes = ws.panes.filter((id) => id !== paneId);
   if (focusedPane === paneId) {
     focusedPane = null;
-    const next = panes.keys().next();
-    if (!next.done) focusPane(next.value);
+    // prefer a pane the active workspace still shows over a hidden one
+    const visibleFirst = [...panes.keys()].find((id) => workspaceOf(id) === activeWorkspace);
+    const nextId = visibleFirst ?? panes.keys().next();
+    if (typeof nextId === 'string') focusPane(nextId);
+    else if (nextId && !nextId.done) focusPane(nextId.value);
   }
-  refreshEmpty(); syncTargets(); renderWorkspaces(); renderFleet();
+  applyWorkspaceFilter(); syncTargets(); renderWorkspaces(); renderFleet();
 }
 
 function syncPaneList(list) {
@@ -252,10 +256,50 @@ function syncPaneList(list) {
     entry.node.dataset.alive = String(pane.alive);
   }
   for (const id of [...panes.keys()]) if (!seen.has(id)) dropPane(id);
-  renderFleet(); updateVitals();
+  applyWorkspaceFilter(); renderFleet(); updateVitals();
 }
 
-function refreshEmpty() { dom.gridEmpty.hidden = panes.size > 0; }
+function refreshEmpty() {
+  const visible = visiblePaneCount();
+  dom.gridEmpty.hidden = visible > 0;
+  dom.gridEmptyText.textContent = (panes.size > 0 && visible === 0)
+    ? 'This workspace has no panes.'
+    : 'No panes yet.';
+}
+
+/** Workspaces are a view filter: the hero grid shows the active one only. */
+function workspaceOf(paneId) {
+  for (const [id, w] of workspaces) if (w.panes.includes(paneId)) return id;
+  return null;
+}
+
+function visiblePaneCount() {
+  const w = workspaces.get(activeWorkspace);
+  if (!w) return panes.size;
+  return w.panes.filter((id) => panes.has(id)).length;
+}
+
+function applyWorkspaceFilter() {
+  const w = workspaces.get(activeWorkspace);
+  for (const [id, entry] of panes) {
+    entry.node.hidden = Boolean(w) && !w.panes.includes(id);
+  }
+  refreshEmpty();
+}
+
+function switchWorkspace(id) {
+  if (!workspaces.has(id)) return;
+  activeWorkspace = id;
+  dom.wsName.textContent = workspaces.get(id).name;
+  renderWorkspaces();
+  applyWorkspaceFilter();
+  // never leave focus on a pane the filter just hid
+  if (focusedPane && workspaceOf(focusedPane) !== id) {
+    const firstVisible = [...panes.keys()].find((p) => workspaceOf(p) === id);
+    if (firstVisible) focusPane(firstVisible);
+  }
+  renderFleet(); updateVitals();
+}
 
 // ---------------------------------------------------------------- workspaces
 
@@ -271,8 +315,9 @@ function renderWorkspaces() {
     const count = document.createElement('span');
     count.className = 'ws-count-panes';
     count.textContent = String(w.panes.length);
+    btn.dataset.attention = String(w.panes.some((id) => (panes.get(id)?.unread ?? 0) > 0));
     btn.append(name, count);
-    btn.addEventListener('click', () => { activeWorkspace = id; dom.wsName.textContent = w.name; renderWorkspaces(); });
+    btn.addEventListener('click', () => switchWorkspace(id));
     dom.wsList.append(btn);
   }
   dom.wsCount.textContent = `${workspaces.size} workspace${workspaces.size === 1 ? '' : 's'}`;
@@ -300,11 +345,16 @@ function renderFleet() {
   const sorted = alive.sort((a, b) => Number(paneAttention(b)) - Number(paneAttention(a)));
   for (const entry of sorted) {
     const attention = paneAttention(entry);
+    const wsId = workspaceOf(entry.pane.id);
+    const elsewhere = wsId !== null && wsId !== activeWorkspace;
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'fleet-row';
     row.dataset.attention = String(attention);
-    row.title = `${entry.pane.id} — jump to pane`;
+    row.dataset.elsewhere = String(elsewhere);
+    row.title = elsewhere
+      ? `${entry.pane.id} — in ${workspaces.get(wsId)?.name ?? wsId}, jump and switch workspace`
+      : `${entry.pane.id} — jump to pane`;
 
     const dot = document.createElement('span');
     dot.className = 'fleet-dot';
@@ -320,14 +370,25 @@ function renderFleet() {
     act.className = 'fleet-activity';
     act.textContent = paneActivity(entry);
 
+    // panes outside the active workspace say where they live
+    if (elsewhere) {
+      const tag = document.createElement('span');
+      tag.className = 'fleet-ws';
+      tag.textContent = workspaces.get(wsId)?.name ?? wsId;
+      row.append(dot, name, tag, act);
+    } else {
+      row.append(dot, name, act);
+    }
+
     const jump = document.createElement('span');
     jump.className = 'fleet-jump';
     jump.textContent = '→';
+    row.append(jump);
 
-    row.append(dot, name, act, jump);
     row.addEventListener('click', () => {
+      if (elsewhere) switchWorkspace(wsId);
       focusPane(entry.pane.id);
-      entry.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      if (!entry.node.hidden) entry.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
     dom.fleetList.append(row);
   }
@@ -346,7 +407,11 @@ function updateVitals() {
 function jumpToAttention() {
   const target = [...panes.values()].find((e) => e.unread > 0)
     || [...panes.values()].find((e) => Date.now() - e.lastOutputAt < 2500);
-  if (target) { focusPane(target.pane.id); target.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  if (!target) return;
+  const wsId = workspaceOf(target.pane.id);
+  if (wsId && wsId !== activeWorkspace) switchWorkspace(wsId);
+  focusPane(target.pane.id);
+  if (!target.node.hidden) target.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 dom.vitalRunning.addEventListener('click', jumpToAttention);
@@ -469,7 +534,7 @@ function noteDelivery(delivery) {
   if (!entry || !delivery.ok) return;
   if (delivery.channel === 'cli') entry.unread = 0;
   else if (delivery.target !== focusedPane) entry.unread += 1;
-  renderUnread(entry); renderFleet(); updateVitals();
+  renderUnread(entry); renderFleet(); renderWorkspaces(); updateVitals();
 }
 
 // ---------------------------------------------------------------- websocket
@@ -559,12 +624,19 @@ let paletteIndex = 0;
 
 function paletteCommands() {
   const q = dom.paletteInput.value.trim().toLowerCase();
-  const paneItems = [...panes.values()].map((e) => ({
-    id: `focus-${e.pane.id}`,
-    label: `Focus pane ${e.pane.id} · ${e.pane.label}`,
-    hint: e.pane.deliveryMode,
-    run: () => { focusPane(e.pane.id); e.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); },
-  }));
+  const paneItems = [...panes.values()].map((e) => {
+    const wsId = workspaceOf(e.pane.id);
+    return {
+      id: `focus-${e.pane.id}`,
+      label: `Focus pane ${e.pane.id} · ${e.pane.label}`,
+      hint: wsId && wsId !== activeWorkspace ? `${wsId} · ${e.pane.deliveryMode}` : e.pane.deliveryMode,
+      run: () => {
+        if (wsId && wsId !== activeWorkspace) switchWorkspace(wsId);
+        focusPane(e.pane.id);
+        if (!e.node.hidden) e.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      },
+    };
+  });
   return [...COMMANDS, ...paneItems].filter((c) => !q || c.label.toLowerCase().includes(q));
 }
 
@@ -620,9 +692,7 @@ function addPane(mode) {
 function addWorkspace() {
   const name = `ws-${workspaces.size + 1}`;
   workspaces.set(name, { name, panes: [] });
-  activeWorkspace = name;
-  dom.wsName.textContent = name;
-  renderWorkspaces();
+  switchWorkspace(name);
 }
 
 function toggleSidebar() {
@@ -781,7 +851,7 @@ if (typeof ResizeObserver === 'function') {
 }
 
 // working/idle dots move on a clock even when nothing else happens
-setInterval(() => { renderFleet(); updateVitals(); }, 3000);
+setInterval(() => { renderFleet(); renderWorkspaces(); updateVitals(); }, 3000);
 
 renderWorkspaces();
 refreshEmpty();

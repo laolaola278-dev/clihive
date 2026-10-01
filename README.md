@@ -43,15 +43,20 @@ The layout keeps the terminals as the hero and pushes chrome to the edges:
 
 - **Titlebar (36px).** Workspace name, live vitals (`N running`, `N need you` —
   shown only when non-zero, click to jump to the pane) and connection state.
-- **Sidebar (240px).** Workspaces only. Collapsible with Ctrl/Cmd+B; a rail
-  button brings it back.
+- **Sidebar (240px).** Workspaces only. A workspace is a *view filter* over the
+  hero grid: switching shows just that workspace's panes, and panes you spawn
+  land in the active one. A red dot on a workspace row means a pane inside it is
+  waiting on you. Collapsible with Ctrl/Cmd+B; a rail button brings it back.
 - **Hero.** The pane grid. The focused pane carries a steel-blue top edge and
   glow so you can find it without reading labels. Panes tile responsively.
 - **Mission-control deck (right, 326px).** Tabs across the top. The **Fleet**
   roster sits above the orchestrator thread: one row per pane with a status dot
   (amber = working, green = idle, grey = exited, red = needs you), a monospace
   activity line and a `→` jump affordance. Rows needing attention sort to the
-  top. Other tabs: shared transcript and the activity trace (filterable).
+  top. Fleet always spans **every** workspace — a pane needing input is never
+  hidden by a filter; its row is tagged with its workspace and clicking it
+  switches there first. Other tabs: shared transcript and the activity trace
+  (filterable).
 - **Command palette (Ctrl/Cmd+K).** Fuzzy search over commands and panes:
   spawn a pane, switch theme, toggle panels, jump to a pane.
 - **Trace drawer (Ctrl/Cmd+Shift+T).** The full event stream along the bottom.
