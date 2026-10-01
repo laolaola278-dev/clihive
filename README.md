@@ -75,7 +75,7 @@ the settings popover. Choices persist in `localStorage` and survive reloads:
 
 | setting | options |
 |---------|---------|
-| **Theme** | `Amber graphite` (default warm neutral) · `Matrix` (phosphor green `#00FF41` + cyan) · `Void` (colourless near-black) |
+| **Theme** | `Amber graphite` (default warm neutral) · `Matrix` (phosphor green `#00FF41` + cyan) · `Void` (colourless near-black) · `Neon` (cyberpunk — hot magenta `#FF2E9A` + electric cyan on deep violet, gradient focus ring, pulsing primary button) |
 | **Background image** | import any image up to 8 MB; stored as a data URL. Panels turn translucent so it reads through. |
 | **Image fit** | `Fill` (cover, crop to window) · `Fit whole image` (letterboxed — use this for 16:9 wallpapers) · `Stretch` |
 | **Image strength** | how far the image shows through the UI (0–70%) |

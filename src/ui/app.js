@@ -138,6 +138,15 @@ const TERM_THEMES = {
     brightYellow: '#d8d8b8', brightBlue: '#c0c0ff', brightMagenta: '#d8c0e8',
     brightCyan: '#b8e0e0', brightWhite: '#ffffff',
   },
+  neon: {
+    background: '#0a0515', foreground: '#f5e8ff', cursor: '#ff2e9a',
+    selectionBackground: '#4a1a6e',
+    black: '#1b0f38', red: '#ff3860', green: '#39ff8f', yellow: '#ffd23f',
+    blue: '#22e8ff', magenta: '#ff2e9a', cyan: '#22e8ff', white: '#f5e8ff',
+    brightBlack: '#7a5a99', brightRed: '#ff6b8f', brightGreen: '#7affc0',
+    brightYellow: '#ffe587', brightBlue: '#7af3ff', brightMagenta: '#ff7ac4',
+    brightCyan: '#7af3ff', brightWhite: '#ffffff',
+  },
 };
 
 function termTheme() {
@@ -617,6 +626,7 @@ const COMMANDS = [
   { id: 'theme-matrix', label: 'Theme: Matrix', run: () => { settings.theme = 'matrix'; saveSettings(); applySettings(); } },
   { id: 'theme-amber', label: 'Theme: Amber graphite', run: () => { settings.theme = 'amber'; saveSettings(); applySettings(); } },
   { id: 'theme-void', label: 'Theme: Void', run: () => { settings.theme = 'void'; saveSettings(); applySettings(); } },
+  { id: 'theme-neon', label: 'Theme: Neon', run: () => { settings.theme = 'neon'; saveSettings(); applySettings(); } },
   { id: 'open-settings', label: 'Appearance settings', run: () => { dom.settings.hidden = false; } },
 ];
 

@@ -273,6 +273,17 @@ try {
   const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
   check(accent === '#00ff41', `matrix theme swaps accent to phosphor green (${accent})`);
 
+  await page.selectOption('#set-theme', 'neon');
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === 'neon', null, { timeout: 5000 },
+  );
+  const neonAccent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  check(neonAccent === '#ff2e9a', `neon theme swaps accent to hot magenta (${neonAccent})`);
+  await page.selectOption('#set-theme', 'matrix');
+  await page.waitForFunction(
+    () => document.documentElement.dataset.theme === 'matrix', null, { timeout: 5000 },
+  );
+
   // background image upload (tiny generated PNG)
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP8//8/AzGAhShCAAD//wPzBAN6D9D7nwAAAABJRU5ErkJggg==',

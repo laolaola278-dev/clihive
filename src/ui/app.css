@@ -78,6 +78,26 @@
   --danger: #e08a8a;
 }
 
+/* ---------- Neon: cyberpunk — hot magenta + electric cyan on deep violet ---------- */
+[data-theme="neon"] {
+  --c-bg-base: #0a0515;
+  --c-bg-mantle: #130a28;
+  --c-bg-surface: #1b0f38;
+  --c-bg-sunken: #05020c;
+  --border-soft: rgba(255, 46, 154, 0.14);
+  --border-strong: rgba(34, 232, 255, 0.3);
+  --text-main: #f5e8ff;
+  --text-sub: #c9a6e8;
+  --text-muted: #7a5a99;
+  --accent: #ff2e9a;            /* hot magenta — alive + attention + action */
+  --accent-rgb: 255, 46, 154;
+  --accent-blue: #22e8ff;       /* electric cyan — navigation + focus */
+  --accent-blue-rgb: 34, 232, 255;
+  --ok: #39ff8f;
+  --danger: #ff3860;
+  --lift: inset 0 1px 0 rgba(255, 46, 154, 0.1);
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -113,6 +133,17 @@ body.has-bg {
 
 .shell { display: flex; flex-direction: column; height: 100vh; position: relative; z-index: 1; }
 
+/* Neon ambient wash: soft magenta/cyan glow bleeding up from the corners */
+[data-theme="neon"] body,
+[data-theme="neon"] html {
+  background:
+    radial-gradient(ellipse 60% 50% at 8% 0%, rgba(255, 46, 154, 0.16), transparent 60%),
+    radial-gradient(ellipse 55% 45% at 100% 100%, rgba(34, 232, 255, 0.14), transparent 60%),
+    var(--bg-base);
+}
+[data-theme="neon"] body.has-bg,
+[data-theme="neon"] body.has-bg html { background: transparent; }
+
 /* ---------- CRT scanlines overlay ---------- */
 body.scanlines-on::after {
   content: ""; position: fixed; inset: 0; z-index: 300; pointer-events: none;
@@ -134,6 +165,44 @@ body.glow-on[data-theme="matrix"] .pane[data-focused="true"]::before {
   box-shadow: 0 0 14px rgba(var(--accent-blue-rgb), 0.8);
 }
 body.glow-on[data-theme="matrix"] .pane-id { text-shadow: 0 0 8px rgba(var(--accent-rgb), 0.6); }
+
+/* Neon: loud glow everywhere — dual-color dots, gradient focus ring, lit text */
+body.glow-on[data-theme="neon"] .mark,
+body.glow-on[data-theme="neon"] .pane-dot,
+body.glow-on[data-theme="neon"] .fleet-dot,
+body.glow-on[data-theme="neon"] .vital-dot {
+  box-shadow: 0 0 9px currentColor, 0 0 18px currentColor;
+}
+body.glow-on[data-theme="neon"] .app-name,
+body.glow-on[data-theme="neon"] .pane-id,
+body.glow-on[data-theme="neon"] .fleet-name {
+  text-shadow: 0 0 10px rgba(var(--accent-rgb), 0.55);
+}
+body.glow-on[data-theme="neon"] .btn-primary {
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), 0.55), 0 0 36px rgba(var(--accent-rgb), 0.25);
+}
+body.glow-on[data-theme="neon"] .pane[data-focused="true"] {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1.5px var(--accent-blue),
+    0 0 16px rgba(var(--accent-blue-rgb), 0.55),
+    0 0 34px rgba(var(--accent-rgb), 0.22);
+}
+body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before {
+  height: 2.5px;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent), var(--accent-blue));
+  background-size: 200% 100%;
+  box-shadow: 0 0 16px rgba(var(--accent-blue-rgb), 0.9), 0 0 10px rgba(var(--accent-rgb), 0.7);
+}
+@media (prefers-reduced-motion: no-preference) {
+  body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before { animation: neon-sweep 3.5s linear infinite; }
+  body.glow-on[data-theme="neon"] .btn-primary { animation: neon-pulse 2.6s ease-in-out infinite; }
+}
+@keyframes neon-sweep { to { background-position: -200% 0; } }
+@keyframes neon-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.45), 0 0 28px rgba(var(--accent-rgb), 0.18); }
+  50% { box-shadow: 0 0 22px rgba(var(--accent-rgb), 0.75), 0 0 44px rgba(var(--accent-rgb), 0.35); }
+}
 
 /* subtle CRT flicker, matrix only, disabled under reduced-motion */
 @media (prefers-reduced-motion: no-preference) {
@@ -434,3 +503,5 @@ body.glow-on[data-theme="matrix"] .pane-id { text-shadow: 0 0 8px rgba(var(--acc
 ::-webkit-scrollbar-thumb { background: #2a2e36; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a3f49; }
 [data-theme="matrix"] ::-webkit-scrollbar-thumb { background: #0e3a1c; }
+[data-theme="neon"] ::-webkit-scrollbar-thumb { background: #4a1a6e; }
+[data-theme="neon"] ::-webkit-scrollbar-thumb:hover { background: #6b2a9e; }
