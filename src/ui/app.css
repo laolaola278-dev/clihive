@@ -494,6 +494,43 @@ body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before {
 .trace-row[data-kind^="pane."] .trace-kind { color: var(--accent-blue); }
 .trace-row[data-kind^="orch."] .trace-kind { color: var(--text-main); }
 
+/* --- CLI flavor identity: every CLI paints its pane with its own accent --- */
+.pane-flavor {
+  font-size: 9px; letter-spacing: 0.07em; text-transform: uppercase;
+  border: 1px solid var(--flavor, var(--border-soft));
+  color: var(--flavor, var(--text-muted));
+  border-radius: 3px; padding: 0 4px; opacity: 0.95;
+}
+.pane .pane-id { color: var(--flavor, var(--accent)); }
+.fleet-flavor {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 9px;
+  border: 1px solid var(--border-soft); border-radius: 3px; padding: 0 4px;
+  color: var(--text-muted);
+}
+.fleet-flavor[hidden] { display: none; }
+
+/* --- key-field highlighting: from/to light up across transcript and trace --- */
+.entry-from { color: var(--accent); font-weight: 600; }
+.entry-arrow { color: var(--text-muted); opacity: 0.7; padding: 0 2px; }
+.entry-to { color: var(--accent-blue); font-weight: 600; }
+.entry-kind {
+  border: 1px solid var(--border-soft); border-radius: 3px;
+  padding: 0 4px; font-size: 10px; color: var(--text-sub);
+}
+.entry-kind[data-kind="task"] { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.4); }
+.entry-kind[data-kind="result"] { color: var(--ok); border-color: rgba(143, 191, 127, 0.35); }
+.entry-kind[data-kind="system"] { color: var(--text-muted); font-style: italic; }
+.tvk { color: var(--text-muted); opacity: 0.7; }
+.tvv { color: var(--text-sub); }
+.tvv.tv-hl { color: var(--accent-blue); font-weight: 600; }
+.tvv.tv-ok { color: var(--ok); }
+.tvv.tv-bad { color: var(--danger); font-weight: 700; }
+body.glow-on .tvv.tv-hl { text-shadow: 0 0 6px rgba(var(--accent-blue-rgb), 0.45); }
+body.glow-on .tvv.tv-ok { text-shadow: 0 0 6px rgba(143, 191, 127, 0.4); }
+body.glow-on .tvv.tv-bad { text-shadow: 0 0 6px rgba(217, 108, 108, 0.5); }
+body.glow-on .entry-from { text-shadow: 0 0 6px rgba(var(--accent-rgb), 0.4); }
+body.glow-on .entry-to { text-shadow: 0 0 6px rgba(var(--accent-blue-rgb), 0.4); }
+
 /* ---------- composer ---------- */
 .composer { border-top: 1px solid var(--border-soft); padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; flex: 0 0 auto; }
 .composer-row { display: flex; align-items: center; gap: 8px; }

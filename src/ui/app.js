@@ -176,12 +176,18 @@ function paneChrome(pane) {
   node.dataset.paneId = pane.id;
   node.dataset.alive = String(pane.alive);
   node.dataset.focused = 'false';
+  // The server recognized what runs in this pane; its flavor paints the pane's
+  // identity (badge + id color) with the CLI's own accent.
+  const flavor = pane.flavor ?? null;
+  node.dataset.flavor = flavor?.id ?? 'generic';
+  if (flavor?.accent) node.style.setProperty('--flavor', flavor.accent);
   node.innerHTML = `
     <div class="pane-head">
       <span class="pane-dot"></span>
       <span class="pane-id">${pane.id}</span>
       <span class="pane-label"></span>
       <span class="pane-meta">
+        <span class="pane-flavor" title="${flavor?.note ?? 'unknown CLI'}"></span>
         <span class="pane-held" hidden title="Held back while a full-screen app owns this pane"></span>
         <span class="pane-geom" title="terminal cols x rows"></span>
         <span class="pane-unread" hidden></span>
@@ -191,6 +197,7 @@ function paneChrome(pane) {
     </div>
     <div class="pane-term"></div>`;
   node.querySelector('.pane-label').textContent = pane.label;
+  node.querySelector('.pane-flavor').textContent = flavor?.label ?? 'cli';
   return node;
 }
 
@@ -453,14 +460,24 @@ function renderFleet() {
     act.className = 'fleet-activity';
     act.textContent = paneActivity(entry);
 
+    // flavor chip: which CLI this row is, in that CLI's own color
+    const flavorChip = document.createElement('span');
+    flavorChip.className = 'fleet-flavor';
+    flavorChip.textContent = entry.pane.flavor?.label ?? '';
+    flavorChip.hidden = !entry.pane.flavor?.label;
+    if (entry.pane.flavor?.accent) {
+      flavorChip.style.color = entry.pane.flavor.accent;
+      flavorChip.style.borderColor = entry.pane.flavor.accent;
+    }
+
     // panes outside the active workspace say where they live
     if (elsewhere) {
       const tag = document.createElement('span');
       tag.className = 'fleet-ws';
       tag.textContent = workspaces.get(wsId)?.name ?? wsId;
-      row.append(dot, name, tag, act);
+      row.append(dot, name, flavorChip, tag, act);
     } else {
-      row.append(dot, name, act);
+      row.append(dot, name, flavorChip, act);
     }
 
     const jump = document.createElement('span');
@@ -520,8 +537,20 @@ function syncTargets() {
 
 function updateComposerHint() {
   const t = dom.orchTarget.value;
-  const alive = [...panes.values()].filter((e) => e.pane.alive).length;
-  dom.composerHint.textContent = t === 'all' ? `relays to ${alive} pane(s)` : `relays to ${t} only`;
+  if (t === 'all') {
+    const alive = [...panes.values()].filter((e) => e.pane.alive).length;
+    dom.composerHint.textContent = `relays to ${alive} pane(s)`;
+    return;
+  }
+  // Single target: say which CLI it is and how the message will physically
+  // arrive — typed into an agent's prompt, or painted into a viewport.
+  const entry = panes.get(t);
+  const flavor = entry?.pane.flavor;
+  const who = flavor?.label && flavor.id !== 'generic' ? `${flavor.label} pane` : 'pane';
+  const how = entry?.pane.deliveryMode === 'stdin'
+    ? 'typed into its prompt (stdin)'
+    : 'painted into its viewport (display)';
+  dom.composerHint.textContent = `relays to ${t} — ${who}, ${how}`;
 }
 
 // ---------------------------------------------------------------- logs
@@ -538,7 +567,12 @@ function renderOrchEntry(entry) {
   const when = document.createElement('span');
   when.textContent = time(entry.ts);
   head.append(who, when);
-  if (entry.to) { const to = document.createElement('span'); to.textContent = `-> ${entry.to}`; head.append(to); }
+  if (entry.to) {
+    const to = document.createElement('span');
+    to.className = 'entry-to';
+    to.textContent = `-> ${entry.to}`;
+    head.append(to);
+  }
   const body = document.createElement('div');
   body.className = 'entry-body';
   body.textContent = entry.text;
@@ -564,12 +598,22 @@ function renderSharedMessage(msg) {
   node.dataset.role = msg.from === 'orchestrator' ? 'orchestrator' : 'pane';
   const head = document.createElement('div');
   head.className = 'entry-head';
+  // from/to are the key fields of a hive message — render them as separately
+  // lit spans instead of one gray string, so the eye can trace who told whom.
   const who = document.createElement('span');
   who.className = 'entry-who';
-  who.textContent = `${msg.from} -> ${msg.to}`;
+  const from = document.createElement('span');
+  from.className = 'entry-from'; from.textContent = msg.from;
+  const arrow = document.createElement('span');
+  arrow.className = 'entry-arrow'; arrow.textContent = '→';
+  const to = document.createElement('span');
+  to.className = 'entry-to'; to.textContent = msg.to;
+  who.append(from, arrow, to);
   const when = document.createElement('span');
   when.textContent = time(msg.ts);
   const kind = document.createElement('span');
+  kind.className = 'entry-kind';
+  kind.dataset.kind = msg.kind;
   kind.textContent = msg.kind;
   head.append(who, when, kind);
   const body = document.createElement('div');
@@ -580,6 +624,11 @@ function renderSharedMessage(msg) {
 }
 
 const TRACE_SKIP = new Set(['seq', 'id', 'ts', 'kind']);
+/** Fields worth lighting up in a trace row: the who/where/how of an event. */
+const TRACE_KEY_FIELDS = new Set([
+  'from', 'to', 'target', 'paneId', 'channel', 'ok', 'held', 'kind', 'flavor', 'reason', 'label',
+]);
+
 function traceRow(event) {
   const row = document.createElement('div');
   row.className = 'trace-row';
@@ -587,8 +636,21 @@ function traceRow(event) {
   const when = document.createElement('span'); when.className = 'trace-time'; when.textContent = time(event.ts);
   const kind = document.createElement('span'); kind.className = 'trace-kind'; kind.textContent = event.kind;
   const detail = document.createElement('span'); detail.className = 'trace-detail';
-  detail.textContent = Object.entries(event).filter(([k]) => !TRACE_SKIP.has(k))
-    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join('  ');
+  // One span per field, keys dim and values lit; the load-bearing fields
+  // (from/to/target/channel/ok/…) glow so a scrolling trace stays skimmable.
+  for (const [k, v] of Object.entries(event)) {
+    if (TRACE_SKIP.has(k)) continue;
+    const key = document.createElement('span');
+    key.className = 'tvk';
+    key.textContent = `${k}=`;
+    const val = document.createElement('span');
+    val.className = 'tvv';
+    val.textContent = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (k === 'ok') val.classList.add(v ? 'tv-ok' : 'tv-bad');
+    else if (k === 'reason') val.classList.add('tv-bad');
+    else if (TRACE_KEY_FIELDS.has(k)) val.classList.add('tv-hl');
+    detail.append(key, val, document.createTextNode('  '));
+  }
   row.append(when, kind, detail);
   return row;
 }

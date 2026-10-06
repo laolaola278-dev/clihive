@@ -27,6 +27,16 @@ pane can read, and every delivery is traced, so you can always answer:
 
 - **Grid of CLI panes.** Each pane is a real PTY (your shell, or an agent CLI
   like `claude` / `codex`). Panes tile; the focused pane is ringed in amber.
+- **Per-CLI adaptation.** The hive recognizes what each pane runs — codex,
+  claude, gemini, qwen, aider, opencode, amp, goose, dsh, shells, node,
+  python — from its command line (`src/server/cli-profiles.js`). The pane wears
+  that CLI's badge and accent color, and its safe delivery default is chosen
+  for it: agent CLIs get messages on `stdin` (which *is* their prompt), shells
+  and unknown tools get non-destructive `display` painting.
+- **Key fields light up.** The shared transcript highlights `from` / `to` and
+  badges the message kind; trace rows render every field as a dim key + lit
+  value, with the load-bearing ones (paneId, target, channel, ok, held,
+  reason) glowing so a scrolling delivery chain stays skimmable.
 - **A hideable orchestrator.** The right-hand window (Ctrl/Cmd+J) addresses one
   pane or the whole hive. In manual mode it relays what you type. Point it at an
   OpenAI-compatible endpoint and a model coordinates instead.
@@ -66,7 +76,10 @@ The layout keeps the terminals as the hero and pushes chrome to the edges:
 Two accents only, so state is legible at a glance: **amber** means alive /
 action / needs attention (running dots, primary button, cursor, unread count);
 **steel blue** means navigation / focus (focused pane edge, active tab, links,
-focus ring). Everything else is warm graphite.
+focus ring). Everything else is warm graphite. One deliberate exception is
+*identity*: each recognized CLI paints its pane badge and id in its own brand
+accent (codex green, claude coral, gemini blue, qwen violet…). Identity never
+encodes state — state stays amber/blue.
 
 ### Appearance
 
@@ -87,12 +100,15 @@ Switching theme re-paints every open terminal's palette live — no pane restart
 ## Delivery: how a message actually reaches a pane
 
 This is the part that matters, so it is explicit. A pane has one of two modes,
-chosen when it is created:
+chosen when it is created — or chosen *for* it by its recognized CLI flavor:
+agent CLIs (codex, claude, gemini, …) default to `stdin` because that is where
+their prompt lives; shells, interpreters and unknown tools default to `display`
+because anything on their stdin would be executed.
 
 | mode | what happens | when to use it |
 |------|--------------|----------------|
-| `display` *(default)* | The message is **painted into the pane's viewport**. The child process is never touched, so a plain shell will not try to execute the text. | shells, REPLs, anything that treats stdin as commands |
-| `stdin` | The message is **written to the process's stdin**, so the program reads it as input. | agent CLIs whose stdin *is* their prompt |
+| `display` *(default for shells & unknown)* | The message is **painted into the pane's viewport**. The child process is never touched, so a plain shell will not try to execute the text. | shells, REPLs, anything that treats stdin as commands |
+| `stdin` *(default for recognized agents)* | The message is **written to the process's stdin**, so the program reads it as input. | agent CLIs whose stdin *is* their prompt |
 
 Both modes also queue the message for **pull**: `hive inbox` inside the pane
 returns the message and acknowledges it. That pull is the acknowledgement —
@@ -211,7 +227,7 @@ The window itself connects over WebSocket at `/ws` and receives `hello`,
 ## Testing
 
 ```bash
-npm test                    # unit tests (protocol, bus, tracer, orchestrator, terminal modes)
+npm test                    # unit tests (protocol, bus, tracer, orchestrator, terminal modes, CLI profiles)
 node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack
 node scripts/verify-ui.mjs  # drives the real window in Chromium
 npm run check               # parse every source file
@@ -226,6 +242,7 @@ src/
     bus.js             shared transcript, fanout, delivery, acks
     panes.js           PTY lifecycle, scrollback, per-pane delivery
     output-modes.js    tracks terminal modes from the byte stream (alt screen)
+    cli-profiles.js    recognizes each pane's CLI (identity, accent, safe default)
     tracer.js          append-only JSONL trace + in-memory ring
     orchestrator.js    the right-hand window: manual relay or model
     http.js            HTTP/JSON API + WebSocket + static serving

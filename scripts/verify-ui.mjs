@@ -125,6 +125,13 @@ try {
   );
   check(true, 'keystrokes reached the PTY and the message hit the shared transcript');
 
+  // key fields of the message must be individually lit, not one gray string
+  check(await page.locator('#shared-log .entry-from').count() > 0
+    && await page.locator('#shared-log .entry-to').count() > 0,
+    'shared transcript highlights from and to as key fields');
+  check(await page.locator('#shared-log .entry-kind[data-kind]').count() > 0,
+    'shared transcript badges the message kind');
+
   // --- the hideable orchestrator -----------------------------------------
   check(await page.locator('#orchestrator').getAttribute('data-open') === 'false',
     'orchestrator starts hidden');
@@ -192,6 +199,10 @@ try {
   );
   check(kinds.includes('msg.send') && kinds.includes('msg.deliver'),
     `trace panel shows the delivery chain (${[...new Set(kinds)].slice(0, 6).join(', ')})`);
+  check(await page.locator('#orch-trace .trace-row .tvv.tv-hl').count() > 0,
+    'trace rows light up key fields (paneId/target/channel/…)');
+  check(await page.locator('#orch-trace .trace-row .tvv.tv-ok').count() > 0,
+    'trace rows light up ok=true deliveries');
 
   await page.fill('#trace-filter', 'msg.deliver');
   await sleep(400);
@@ -303,6 +314,15 @@ try {
   }, pn.id);
   check(geoReadout.text === `${geoReadout.cols}×${geoReadout.rows}`,
     `pane chrome shows a geometry readout matching the terminal (${geoReadout.text})`);
+  // flavor recognition: this pane spawned `node`, so its chrome must carry the
+  // node flavor (badge + data-flavor), which is what drives per-CLI identity
+  // and safe delivery defaults
+  const flavorInfo = await page.evaluate((id) => {
+    const n = document.querySelector(`.pane[data-pane-id="${id}"]`);
+    return { flavor: n ? n.dataset.flavor : null, chip: n ? (n.querySelector('.pane-flavor')?.textContent ?? null) : null };
+  }, pn.id);
+  check(flavorInfo.flavor === 'node' && flavorInfo.chip === 'node',
+    `pane chrome shows its recognized CLI flavor (${flavorInfo.flavor})`);
   check(await server.panes.altScreen(pn.id) === false,
     'a plain child does not claim the alternate screen');
 

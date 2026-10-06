@@ -23,6 +23,7 @@ import {
   stripAnsi,
 } from '../shared/protocol.js';
 import { OutputModeTracker } from './output-modes.js';
+import { detectCliProfile } from './cli-profiles.js';
 
 const SCROLLBACK_BYTES = 256 * 1024;
 const MAX_PANES = 32;
@@ -63,6 +64,8 @@ class Pane {
     this.rows = init.rows;
     this.createdAt = init.createdAt;
     this.deliveryMode = init.deliveryMode;
+    /** Recognized CLI flavor (see cli-profiles.js); drives UI identity. */
+    this.flavor = init.flavor ?? null;
     this.pty = init.pty;
     this.pid = init.pty?.pid ?? null;
     this.exit = null;
@@ -134,6 +137,7 @@ class Pane {
       pid: this.pid,
       createdAt: this.createdAt,
       deliveryMode: this.deliveryMode,
+      flavor: this.flavor,
       alive: this.exit === null,
       exit: this.exit,
     };
@@ -193,8 +197,9 @@ export class PaneManager extends EventEmitter {
    * @param {number} [spec.rows]
    * @param {Record<string,string>} [spec.env]
    * @param {'display'|'stdin'} [spec.deliveryMode] How hive messages arrive.
-   *   `display` paints into the viewport (safe for a plain shell, default),
-   *   `stdin` writes to the process (for agent CLIs that read stdin).
+   *   `display` paints into the viewport (safe for a plain shell), `stdin`
+   *   writes to the process (for agent CLIs that read stdin). Defaults to the
+   *   detected CLI flavor's safe mode (see cli-profiles.js).
    */
   async create(spec = {}) {
     if (this.panes.size >= MAX_PANES) {
@@ -213,9 +218,14 @@ export class PaneManager extends EventEmitter {
     const cwd = isLabel(spec.cwd) ? spec.cwd : this.defaultCwd;
     const cols = clampInt(spec.cols, 20, 500, 100);
     const rows = clampInt(spec.rows, 5, 200, 28);
+    // Recognize what is about to run. The flavor drives the pane's identity in
+    // the UI and, when the caller did not choose explicitly, the safe delivery
+    // default: an agent CLI reads stdin as its prompt, while a plain shell
+    // would try to EXECUTE anything that arrives there.
+    const flavor = detectCliProfile(command, args);
     const deliveryMode = DELIVERY_MODE_VALUES.includes(spec.deliveryMode)
       ? spec.deliveryMode
-      : DELIVERY_MODES.DISPLAY;
+      : flavor.suggestMode;
 
     // Panes learn their own identity from the environment, so `hive send`
     // inside a pane needs no arguments to know who it is.
@@ -225,6 +235,7 @@ export class PaneManager extends EventEmitter {
       CLIHIVE_PANE_ID: id,
       CLIHIVE_PANE_LABEL: label,
       CLIHIVE_DELIVERY_MODE: deliveryMode,
+      CLIHIVE_FLAVOR: flavor.id,
       TERM: 'xterm-256color',
     };
     if (isLabel(spec.pathPrepend)) prependPath(env, spec.pathPrepend);
@@ -259,6 +270,7 @@ export class PaneManager extends EventEmitter {
       rows,
       createdAt: Date.now(),
       deliveryMode,
+      flavor: { id: flavor.id, label: flavor.label, accent: flavor.accent, tui: flavor.tui, note: flavor.note },
       pty: child,
     });
     this.panes.set(id, pane);
@@ -298,6 +310,7 @@ export class PaneManager extends EventEmitter {
       label,
       command,
       args,
+      flavor: flavor.id,
       cwd,
       cols,
       rows,
