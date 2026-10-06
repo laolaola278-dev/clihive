@@ -183,6 +183,7 @@ function paneChrome(pane) {
       <span class="pane-label"></span>
       <span class="pane-meta">
         <span class="pane-held" hidden title="Held back while a full-screen app owns this pane"></span>
+        <span class="pane-geom" title="terminal cols x rows"></span>
         <span class="pane-unread" hidden></span>
         <span class="pane-badge" data-mode="${pane.deliveryMode}">${pane.deliveryMode}</span>
         <button class="icon-btn pane-kill" type="button" title="Close pane">&times;</button>
@@ -242,6 +243,8 @@ function fitPane(entry) {
   if (box.width < 40 || box.height < 40) return;
   try {
     entry.fit.fit();
+    const geo = entry.node.querySelector('.pane-geom');
+    if (geo) geo.textContent = `${entry.term.cols}×${entry.term.rows}`;
     send({ type: WS_CLIENT.PANE_RESIZE, paneId: entry.pane.id, cols: entry.term.cols, rows: entry.term.rows });
   } catch { /* not laid out yet */ }
 }

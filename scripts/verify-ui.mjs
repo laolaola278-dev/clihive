@@ -295,6 +295,14 @@ try {
   }, pn.id);
   check(geom !== null && geom.cols >= 20 && geom.rows >= 5,
     `pane mounts with a real geometry (${geom?.cols}x${geom?.rows})`);
+  // the chrome readout must agree with the real terminal geometry
+  const geoReadout = await page.evaluate((id) => {
+    const e = window.__clihive.panes.get(id);
+    const n = document.querySelector(`.pane[data-pane-id="${id}"] .pane-geom`);
+    return { text: n ? n.textContent : null, cols: e ? e.term.cols : -1, rows: e ? e.term.rows : -1 };
+  }, pn.id);
+  check(geoReadout.text === `${geoReadout.cols}×${geoReadout.rows}`,
+    `pane chrome shows a geometry readout matching the terminal (${geoReadout.text})`);
   check(await server.panes.altScreen(pn.id) === false,
     'a plain child does not claim the alternate screen');
 

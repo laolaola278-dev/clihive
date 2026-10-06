@@ -363,6 +363,10 @@ body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before {
   background: rgba(var(--accent-blue-rgb), 0.1);
 }
 .pane-held[hidden] { display: none; }
+/* terminal geometry readout in the pane chrome (cols x rows) */
+.pane-geom {
+  color: var(--accent-blue); opacity: 0.6; font-size: 10px; letter-spacing: 0.04em;
+}
 .pane-term { flex: 1 1 auto; min-height: 0; padding: 4px 2px 2px 6px; }
 .pane-term .xterm { height: 100%; }
 
