@@ -22,6 +22,7 @@ import {
   isLabel,
   stripAnsi,
 } from '../shared/protocol.js';
+import { OutputModeTracker } from './output-modes.js';
 
 const SCROLLBACK_BYTES = 256 * 1024;
 const MAX_PANES = 32;
@@ -68,9 +69,28 @@ class Pane {
     /** @type {string[]} */
     this.chunks = [];
     this.bytes = 0;
+    /** Total chars ever emitted — the stream's own coordinate system. */
+    this.chars = 0;
+    /** Terminal modes the stream has switched on, reconstructed as it flows. */
+    this.modes = new OutputModeTracker();
+    /**
+     * Display-mode injections held back because a full-screen app owns the
+     * screen right now. Painting them into its buffer is what makes a TUI pane's
+     * output overlap into unreadable garbage.
+     * @type {string[]}
+     */
+    this.heldOverlays = [];
+    /** Retry timer so held text cannot be stranded by a silent app. */
+    this.heldTimer = null;
   }
 
   append(data) {
+    const end = this.chars + data.length;
+    // Feed the tracker BEFORE the counter moves: it needs the offset this chunk
+    // ends at to decide whether a later replay window still contains an
+    // alt-screen entry.
+    this.modes.feed(data, end);
+    this.chars = end;
     this.chunks.push(data);
     this.bytes += data.length;
     while (this.bytes > SCROLLBACK_BYTES && this.chunks.length > 1) {
@@ -80,6 +100,26 @@ class Pane {
 
   scrollback() {
     return this.chunks.join('');
+  }
+
+  /**
+   * The replay window a newly attached client should be given, with the offsets
+   * that make it idempotent and the mode preamble that makes it safe.
+   *
+   * `from`/`to` are absolute char offsets in the stream, so a client that has
+   * already seen part of this window can tell exactly what is new instead of
+   * painting the same bytes twice.
+   */
+  replay() {
+    const data = this.scrollback();
+    const from = this.chars - this.bytes;
+    return {
+      data,
+      from,
+      to: this.chars,
+      preamble: this.modes.preamble(from),
+      altScreen: this.modes.altScreen,
+    };
   }
 
   toJSON() {
@@ -227,11 +267,22 @@ export class PaneManager extends EventEmitter {
 
     child.onData((data) => {
       pane.append(data);
-      this.emit('data', { paneId: id, data });
+      this.emit('data', { paneId: id, data, from: pane.chars - data.length, to: pane.chars });
+      // The child may have just handed the screen back (`ESC[?1049l`). Anything
+      // we were holding for it can now be painted without landing on top of a
+      // full-screen app's own drawing.
+      this.#flushHeld(pane);
     });
 
     child.onExit(({ exitCode, signal }) => {
       pane.exit = { code: exitCode ?? null, signal: signal ?? null, at: Date.now() };
+      // An exited pane will never hand the screen back, so held text can only be
+      // stranded: drop it and clear the retry timer.
+      if (pane.heldTimer) { clearTimeout(pane.heldTimer); pane.heldTimer = null; }
+      if (pane.heldOverlays.length > 0) {
+        pane.heldOverlays.length = 0;
+        this.emit('held', { paneId: id, held: 0 });
+      }
       this.tracer.emitTrace(TRACE.PANE_EXIT, {
         paneId: id,
         label,
@@ -280,9 +331,53 @@ export class PaneManager extends EventEmitter {
     // so a plain shell will not try to run the text as a command. It goes into
     // the scrollback too, so a reconnecting window replays it in place.
     const block = formatForPty(msg, { label: pane.label, mode: DELIVERY_MODES.DISPLAY });
-    pane.append(block);
-    this.emit('data', { paneId: pane.id, data: block, overlay: true });
+
+    // Unless a full-screen app owns the screen right now. Such an app repaints
+    // by absolute cursor position and only redraws the cells it changed, so
+    // foreign text painted into its buffer stays on screen as garbage woven
+    // through its own frame. Hold it and paint it the moment the app leaves.
+    if (pane.modes.altScreen) {
+      pane.heldOverlays.push(block);
+      this.emit('held', { paneId: pane.id, held: pane.heldOverlays.length });
+      this.#scheduleHeldFlush(pane);
+      // The bus records msg.deliver itself; `held` rides along so the trace says
+      // why nothing was painted yet.
+      return { ok: true, channel: DELIVERY_CHANNELS.DISPLAY, held: true, reason: 'alternate-screen' };
+    }
+
+    this.#paintOverlay(pane, block);
     return { ok: true, channel: DELIVERY_CHANNELS.DISPLAY };
+  }
+
+  /** Append one overlay block to the stream and push it to every window. */
+  #paintOverlay(pane, block) {
+    const from = pane.chars;
+    pane.append(block);
+    this.emit('data', { paneId: pane.id, data: block, from, to: pane.chars, overlay: true });
+  }
+
+  /**
+   * Paint anything held for a pane once the screen belongs to us again.
+   * Called after every child output chunk (that is when `?1049l` arrives) and
+   * from a short retry timer, so held text cannot be stranded by an app that
+   * leaves the alternate buffer and then says nothing.
+   */
+  #flushHeld(pane) {
+    if (pane.heldOverlays.length === 0) return;
+    if (pane.modes.altScreen) { this.#scheduleHeldFlush(pane); return; }
+    if (pane.heldTimer) { clearTimeout(pane.heldTimer); pane.heldTimer = null; }
+    const blocks = pane.heldOverlays.splice(0);
+    for (const block of blocks) this.#paintOverlay(pane, block);
+    this.emit('held', { paneId: pane.id, held: 0 });
+  }
+
+  #scheduleHeldFlush(pane) {
+    if (pane.heldTimer) return;
+    pane.heldTimer = setTimeout(() => {
+      pane.heldTimer = null;
+      this.#flushHeld(pane);
+    }, 400);
+    pane.heldTimer.unref?.();
   }
 
   /**
@@ -342,6 +437,32 @@ export class PaneManager extends EventEmitter {
   scrollback(paneId) {
     const pane = this.panes.get(paneId);
     return pane ? pane.scrollback() : '';
+  }
+
+  /**
+   * The replay window for a newly attached client: data, its absolute stream
+   * offsets, and the mode preamble that makes it safe to paint. An unknown pane
+   * yields an empty window rather than throwing, so a stale subscribe cannot
+   * kill the socket.
+   */
+  replay(paneId) {
+    const pane = this.panes.get(paneId);
+    if (!pane) return { data: '', from: 0, to: 0, preamble: '', altScreen: false };
+    return pane.replay();
+  }
+
+  /**
+   * True while this pane's stream is painting into an alternate screen buffer,
+   * i.e. a full-screen TUI owns it. Tracked on the server because ConPTY hides
+   * the switch from the browser's terminal object.
+   */
+  altScreen(paneId) {
+    return this.panes.get(paneId)?.modes.altScreen ?? false;
+  }
+
+  /** How many injected messages are waiting for the screen back. */
+  heldCount(paneId) {
+    return this.panes.get(paneId)?.heldOverlays.length ?? 0;
   }
 
   /** Kill everything. Used on shutdown. */

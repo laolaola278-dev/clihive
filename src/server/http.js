@@ -128,8 +128,15 @@ export class HiveServer {
   }
 
   #wireEvents() {
-    this.panes.on('data', ({ paneId, data }) => {
-      this.#broadcast({ type: WS_SERVER.PANE_DATA, paneId, data });
+    this.panes.on('data', ({ paneId, data, overlay, from, to }) => {
+      // `overlay` marks hive-injected display text. `from`/`to` are absolute char
+      // offsets in the pane's stream: a window uses them to paint each byte
+      // exactly once, which is what keeps a replay from double-writing over the
+      // live frames it already received.
+      this.#broadcast({ type: WS_SERVER.PANE_DATA, paneId, data, overlay: Boolean(overlay), from, to });
+    });
+    this.panes.on('held', ({ paneId, held }) => {
+      this.#broadcast({ type: WS_SERVER.PANE_HELD, paneId, held });
     });
     this.panes.on('exit', ({ paneId, exit }) => {
       this.#broadcast({ type: WS_SERVER.PANE_EXIT, paneId, exit });
@@ -232,14 +239,29 @@ export class HiveServer {
       case WS_CLIENT.PANE_KILL:
         this.panes.kill(frame.paneId);
         break;
-      case WS_CLIENT.PANE_SUBSCRIBE:
+      case WS_CLIENT.PANE_SUBSCRIBE: {
+        // The window is the authoritative recent state of this pane, so the
+        // client resets and repaints from it rather than appending: appending a
+        // window on top of live frames already received is what smears a
+        // full-screen app's output into overlapping frames.
+        //
+        // `preamble` puts a fresh terminal into the mode state the stream is
+        // really in. Without it, a TUI that entered the alternate screen before
+        // this window starts paints absolute-positioned frames onto the normal
+        // buffer, interleaved over the scrollback.
+        const win = this.panes.replay(frame.paneId);
         ws.send(JSON.stringify({
           type: WS_SERVER.PANE_DATA,
           paneId: frame.paneId,
-          data: this.panes.scrollback(frame.paneId),
+          data: win.data,
+          preamble: win.preamble,
+          altScreen: win.altScreen,
+          from: win.from,
+          to: win.to,
           replay: true,
         }));
         break;
+      }
       case WS_CLIENT.SEND: {
         const result = await this.bus.publish(
           { ...frame.message, from: frame.message?.from || ADDRESS_HUMAN },

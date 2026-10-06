@@ -99,6 +99,42 @@ returns the message and acknowledges it. That pull is the acknowledgement —
 it proves an agent actually read the message, even if it was mid-turn when the
 push landed.
 
+### Nothing paints over a full-screen app
+
+A `display` message is painted into the pane's viewport. That is safe for a
+shell, but a full-screen TUI (codex, claude, vim, less) owns the screen and
+repaints by absolute cursor position, only redrawing the cells it changed.
+Foreign text written into its buffer therefore stays on screen as garbage woven
+through its own frame — the tool's context appears to overlap itself.
+
+So the hive tracks the terminal modes each pane's output stream has switched on
+(`src/server/output-modes.js`) and **holds** a `display` message while an
+alternate screen is active, painting it the moment the app gives the screen
+back. The pane header shows `◈ N held` while anything is waiting, and the
+delivery trace records `held: true` with `reason: "alternate-screen"`. Nothing
+is lost in the meantime: the message is on the shared transcript, in the deck,
+and pullable with `hive inbox`.
+
+Mode state is reconstructed from the byte stream rather than read from the
+browser's terminal object, because on Windows the PTY runs through ConPTY, which
+consumes the child's `?1049h` itself and renders the TUI — so the client-side
+buffer type never reports "alternate".
+
+### Each byte is painted exactly once
+
+A pane's output reaches the window by two paths: the live broadcast, and the
+scrollback replay that answers a subscribe. Without a shared coordinate system
+they paint the same bytes twice — a shell shows doubled lines, and a TUI smears
+one frame over another. Every frame therefore carries its `[from,to)` range in
+the pane's own character stream, a window paints each byte once, and a replay
+**resets and repaints** from the window instead of appending. The replay is also
+prefixed with a mode preamble when the app entered the alternate screen before
+the window starts, so the viewer is never left on the normal buffer while
+absolute-positioned frames arrive.
+
+Panes are spawned at the size the grid will actually show them at, so a TUI does
+not draw its opening frames for one geometry and then repaint for another.
+
 ## Run it
 
 ```bash
@@ -175,7 +211,7 @@ The window itself connects over WebSocket at `/ws` and receives `hello`,
 ## Testing
 
 ```bash
-npm test                    # unit tests (protocol, bus, tracer, orchestrator)
+npm test                    # unit tests (protocol, bus, tracer, orchestrator, terminal modes)
 node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack
 node scripts/verify-ui.mjs  # drives the real window in Chromium
 npm run check               # parse every source file
@@ -189,6 +225,7 @@ src/
   server/
     bus.js             shared transcript, fanout, delivery, acks
     panes.js           PTY lifecycle, scrollback, per-pane delivery
+    output-modes.js    tracks terminal modes from the byte stream (alt screen)
     tracer.js          append-only JSONL trace + in-memory ring
     orchestrator.js    the right-hand window: manual relay or model
     http.js            HTTP/JSON API + WebSocket + static serving

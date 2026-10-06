@@ -101,6 +101,8 @@ export const WS_SERVER = Object.freeze({
   PANE_LIST: 'pane.list',
   PANE_DATA: 'pane.data',
   PANE_EXIT: 'pane.exit',
+  /** A pane is holding injected text back because a full-screen app owns it. */
+  PANE_HELD: 'pane.held',
   MESSAGE: 'message',
   DELIVERY: 'delivery',
   TRACE: 'trace',

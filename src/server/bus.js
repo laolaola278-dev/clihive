@@ -173,6 +173,7 @@ export class MessageBus extends EventEmitter {
     const sink = this.ptySinks.get(target);
     let ok = false;
     let reason = null;
+    let held = false;
     let channel = DELIVERY_CHANNELS.DISPLAY;
 
     if (!sink) {
@@ -187,6 +188,7 @@ export class MessageBus extends EventEmitter {
           ok = result.ok !== false;
           channel = result.channel ?? channel;
           reason = result.reason ?? null;
+          held = result.held === true;
         } else {
           ok = result !== false;
         }
@@ -207,6 +209,8 @@ export class MessageBus extends EventEmitter {
       ts: this.now(),
       reason,
     };
+    // Only recorded when true, so a normal delivery stays as lean as before.
+    if (held) record.held = true;
     this.#addDelivery(record);
     this.tracer.emitTrace(ok ? TRACE.MSG_DELIVER : TRACE.MSG_DROP, record);
     this.emit('delivery', record);

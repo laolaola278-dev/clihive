@@ -356,8 +356,58 @@ body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before {
 .pane-badge[data-mode="stdin"] { color: var(--accent); border-color: rgba(var(--accent-rgb),0.4); }
 .pane-unread { background: var(--accent); color: #1a1206; font-weight: 700; border-radius: 8px; padding: 0 6px; }
 .pane-unread[hidden] { display: none; }
+/* injected text held back because a full-screen app owns this pane right now */
+.pane-held {
+  color: var(--accent-blue); border: 1px solid rgba(var(--accent-blue-rgb), 0.45);
+  border-radius: 3px; padding: 0 5px; font-size: 10px;
+  background: rgba(var(--accent-blue-rgb), 0.1);
+}
+.pane-held[hidden] { display: none; }
 .pane-term { flex: 1 1 auto; min-height: 0; padding: 4px 2px 2px 6px; }
 .pane-term .xterm { height: 100%; }
+
+/* HUD targeting brackets on the focused pane */
+.pane[data-focused="true"]::after {
+  content: ""; position: absolute; inset: 3px; z-index: 6; pointer-events: none;
+  background:
+    linear-gradient(var(--accent-blue), var(--accent-blue)) left top / 16px 2px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) left top / 2px 16px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) right top / 16px 2px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) right top / 2px 16px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) left bottom / 16px 2px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) left bottom / 2px 16px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) right bottom / 16px 2px no-repeat,
+    linear-gradient(var(--accent-blue), var(--accent-blue)) right bottom / 2px 16px no-repeat;
+  opacity: 0.7;
+}
+[data-theme="matrix"] .pane[data-focused="true"]::after { opacity: 0.9; }
+[data-theme="neon"] .pane[data-focused="true"]::after {
+  opacity: 1; filter: drop-shadow(0 0 4px rgba(var(--accent-blue-rgb), 0.9));
+}
+
+/* tech backdrop: faint blueprint grid behind the terminals */
+[data-theme="matrix"] .hero,
+[data-theme="neon"] .hero {
+  background-image:
+    linear-gradient(rgba(var(--accent-blue-rgb), 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--accent-blue-rgb), 0.05) 1px, transparent 1px);
+  background-size: 34px 34px, 34px 34px;
+}
+
+/* lit hairline under the titlebar + a slow sweep on the hero toolbar */
+[data-theme="matrix"] .titlebar,
+[data-theme="neon"] .titlebar { box-shadow: inset 0 -1px 0 rgba(var(--accent-blue-rgb), 0.35); }
+.hero-toolbar { position: relative; }
+@media (prefers-reduced-motion: no-preference) {
+  body.glow-on[data-theme="matrix"] .hero-toolbar::after,
+  body.glow-on[data-theme="neon"] .hero-toolbar::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-blue), transparent);
+    background-size: 40% 100%; background-repeat: no-repeat;
+    animation: hairline 7s linear infinite; opacity: 0.7;
+  }
+}
+@keyframes hairline { 0% { background-position: -40% 0; } 100% { background-position: 140% 0; } }
 
 .icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
 .icon-btn:hover { color: var(--text-main); background: rgba(239,238,236,0.06); }

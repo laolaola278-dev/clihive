@@ -261,6 +261,54 @@ try {
   );
   check((await visiblePanes()).sort().join(',') === 'p1,p2', 'fleet jump switched back to that pane\'s workspace');
 
+  // --- stream integrity: a pane's bytes are painted exactly once -------------
+  // This is the codex-class bug: a pane's output reaches the window both as live
+  // broadcast and as the scrollback replay that answers a subscribe, so the same
+  // bytes can be written twice. A shell shows doubled lines; a full-screen TUI,
+  // which repaints by absolute cursor position, smears one frame over another —
+  // the "overlapping context". A pane spawned at the server's default size and
+  // resized a moment later gives a TUI two geometries to draw with, which
+  // overlaps its frames the same way. So each byte must land exactly once, and
+  // the pane must start at the size it will actually be shown at.
+  const byteMarker = `DUPE-MARK-${Date.now()}`;
+  const pn = await server.createPane({ command: process.execPath, args: ['-e', "process.stdout.write(process.argv[1]);", byteMarker] });
+  await page.waitForSelector(`.pane[data-pane-id="${pn.id}"]`, { timeout: 15000 });
+  await page.waitForFunction(
+    ([id, m]) => window.__clihive.bufferText(id).includes(m), [pn.id, byteMarker], { timeout: 20000 },
+  );
+  check(true, 'a pane renders its child output once');
+
+  const countOf = (m) => page.evaluate(([needle, mark]) => {
+    const t = window.__clihive.bufferText(needle);
+    return t.split(mark).length - 1;
+  }, [pn.id, m]);
+
+  // exactly one copy: the replay and the live broadcast must not both paint it
+  check(await countOf(byteMarker) === 1, "the child's byte appears exactly once (no replay+live double-paint)");
+
+  // geometry: the pane started at the size the grid will show it at, so the PTY
+  // and the terminal already agree — no post-hoc resize that would force a TUI
+  // to redraw its opening frames at a second geometry.
+  const geom = await page.evaluate((id) => {
+    const e = window.__clihive.panes.get(id);
+    return e ? { cols: e.term.cols, rows: e.term.rows } : null;
+  }, pn.id);
+  check(geom !== null && geom.cols >= 20 && geom.rows >= 5,
+    `pane mounts with a real geometry (${geom?.cols}x${geom?.rows})`);
+  check(await server.panes.altScreen(pn.id) === false,
+    'a plain child does not claim the alternate screen');
+
+  // re-attach (reload) must not duplicate the already-painted byte
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.__clihive !== undefined, null, { timeout: 10000 });
+  await page.waitForSelector(`.pane[data-pane-id="${pn.id}"]`, { timeout: 15000 });
+  await page.waitForFunction(
+    ([id, m]) => window.__clihive.bufferText(id).includes(m), [pn.id, byteMarker], { timeout: 20000 },
+  );
+  check(await countOf(byteMarker) === 1,
+    're-attach paints the byte exactly once (replay is authoritative, not additive)');
+
+
   // --- appearance: theme + background (reload-sensitive, runs last) -------
   await page.click('#open-settings');
   await page.waitForSelector('#settings:not([hidden])', { timeout: 5000 });

@@ -182,6 +182,7 @@ function paneChrome(pane) {
       <span class="pane-id">${pane.id}</span>
       <span class="pane-label"></span>
       <span class="pane-meta">
+        <span class="pane-held" hidden title="Held back while a full-screen app owns this pane"></span>
         <span class="pane-unread" hidden></span>
         <span class="pane-badge" data-mode="${pane.deliveryMode}">${pane.deliveryMode}</span>
         <button class="icon-btn pane-kill" type="button" title="Close pane">&times;</button>
@@ -211,7 +212,9 @@ function mountPane(pane) {
   if (panes.has(pane.id)) return panes.get(pane.id);
   const node = paneChrome(pane);
   const { term, fit } = newTerminal();
-  const entry = { term, fit, pane, node, unread: 0, lastOutputAt: 0 };
+  // `cursor` is how many chars of this pane's stream have been painted; `held`
+  // is the server's count of injected messages waiting for the screen back.
+  const entry = { term, fit, pane, node, unread: 0, lastOutputAt: 0, cursor: 0, held: 0 };
   panes.set(pane.id, entry);
   workspaces.get(activeWorkspace)?.panes.push(pane.id);
 
@@ -231,10 +234,76 @@ function mountPane(pane) {
 }
 
 function fitPane(entry) {
+  // A pane that is hidden (workspace filter) or not laid out yet has no usable
+  // box: fitting it would compute a bogus geometry and resize the PTY to match,
+  // which makes a full-screen app redraw at the wrong size and smear output.
+  if (entry.node.hidden || !entry.node.isConnected) return;
+  const box = entry.node.getBoundingClientRect();
+  if (box.width < 40 || box.height < 40) return;
   try {
     entry.fit.fit();
     send({ type: WS_CLIENT.PANE_RESIZE, paneId: entry.pane.id, cols: entry.term.cols, rows: entry.term.rows });
   } catch { /* not laid out yet */ }
+}
+
+function fitAll() { for (const entry of panes.values()) fitPane(entry); }
+
+// ---------------------------------------------------------------- stream integrity
+//
+// Two paths deliver a pane's bytes to this window: the live broadcast, and the
+// scrollback replay that answers a subscribe. Without a shared coordinate system
+// they paint the same bytes twice — a shell shows doubled lines, and a full-screen
+// TUI, which repaints by absolute cursor position, smears one frame over another
+// and over the scrollback. That smear is the "overlapping context" a codex pane
+// shows. So every frame carries [from,to) in the pane's own stream and each byte
+// is painted exactly once.
+
+function applyStreamFrame(entry, frame) {
+  const data = frame.data ?? '';
+  if (frame.replay) {
+    // The window is the authoritative recent state of the pane, so reset and
+    // repaint from it instead of appending over frames that already arrived.
+    // `preamble` puts this terminal into the mode state the stream is really in:
+    // without it, a TUI that entered the alternate screen before the window
+    // starts paints absolute-positioned frames onto the normal buffer.
+    entry.term.reset();
+    entry.term.write((frame.preamble || '') + data);
+    entry.cursor = typeof frame.to === 'number' ? frame.to : data.length;
+    return true;
+  }
+  const to = typeof frame.to === 'number' ? frame.to : entry.cursor + data.length;
+  const from = typeof frame.from === 'number' ? frame.from : entry.cursor;
+  if (to <= entry.cursor) return false; // already painted
+  // Trim only the part this window has already seen. Live frames are contiguous,
+  // so the overlap is always a prefix.
+  entry.term.write(data.slice(Math.max(0, entry.cursor - from)));
+  entry.cursor = to;
+  return true;
+}
+
+// ---------------------------------------------------------------- TUI-safe injection
+//
+// A hive message in `display` mode is painted into the pane's viewport. That is
+// safe for a shell, but a full-screen TUI (codex, claude, htop, less) owns the
+// screen: foreign text written into its buffer stays there as garbage woven
+// through its own frame, because such an app only redraws the cells it changed.
+// The hive therefore holds the message server-side until the app gives the
+// screen back, and reports how many are waiting. The count lives on the server
+// because that is where it can be trusted — on Windows ConPTY swallows the
+// child's alternate-screen switch, so this terminal's own buffer type never
+// reports it. Nothing is lost while held: the message is also on the shared
+// transcript, in the deck, and pullable with `hive inbox`.
+
+function setHeld(entry, count) {
+  entry.held = count;
+  const chip = entry.node.querySelector('.pane-held');
+  if (!chip) return;
+  if (count > 0) {
+    chip.textContent = `◈ ${count} held`;
+    chip.hidden = false;
+  } else {
+    chip.hidden = true;
+  }
 }
 
 function dropPane(paneId) {
@@ -308,6 +377,8 @@ function switchWorkspace(id) {
     if (firstVisible) focusPane(firstVisible);
   }
   renderFleet(); updateVitals();
+  // panes that were hidden never got a usable fit; size them now that they show
+  requestAnimationFrame(fitAll);
 }
 
 // ---------------------------------------------------------------- workspaces
@@ -578,11 +649,16 @@ function handleFrame(frame) {
     case 'pane.created': mountPane(frame.pane); focusPane(frame.pane.id); break;
     case 'pane.data': {
       const entry = panes.get(frame.paneId);
-      if (entry && frame.data) {
-        entry.term.write(frame.data);
-        entry.lastOutputAt = Date.now();
+      // A replay of an empty pane still matters: it sets the stream cursor.
+      if (entry && (frame.data || frame.replay)) {
+        if (applyStreamFrame(entry, frame)) entry.lastOutputAt = Date.now();
         if (!frame.replay) scheduleFleetRefresh();
       }
+      break;
+    }
+    case 'pane.held': {
+      const entry = panes.get(frame.paneId);
+      if (entry) setHeld(entry, frame.held ?? 0);
       break;
     }
     case 'pane.exit': {
@@ -695,8 +771,49 @@ dom.openPalette.addEventListener('click', openPalette);
 
 // ---------------------------------------------------------------- actions
 
+// ---------------------------------------------------------------- spawn geometry
+//
+// A pane spawned at the server default (80x24) and resized a moment after mount
+// gives a full-screen TUI two geometries to draw with: it paints its opening
+// frames for 80x24, then the PTY resizes and it repaints for the real cell
+// count. On Windows ConPTY renders the TUI itself and emits absolute-positioned
+// frames computed for the PTY's size, so the two sizes' frames interleave in one
+// buffer and the pane's context overlaps into unreadable garbage. Measuring the
+// target before spawning removes that window almost entirely.
+
+function targetGeometry() {
+  // Reuse an existing visible pane's terminal size: the grid gives every pane
+  // the same cell dimensions, so this is exact when panes already exist.
+  for (const entry of panes.values()) {
+    if (!entry.node.hidden && entry.term.cols > 1) {
+      return { cols: entry.term.cols, rows: entry.term.rows };
+    }
+  }
+  // First pane: the grid is empty, so it fills the hero. Probe with a throwaway
+  // terminal fitted to an estimated box so the child starts at the right size.
+  const hero = dom.grid.getBoundingClientRect();
+  if (hero.width < 160 || hero.height < 160) return {};
+  const probe = document.createElement('div');
+  probe.className = 'pane';
+  probe.style.cssText = 'height:240px;';
+  probe.innerHTML = '<div class="pane-head"></div><div class="pane-term"></div>';
+  const shell = document.createElement('div');
+  shell.style.cssText = `position:absolute;visibility:hidden;left:0;top:0;width:${Math.max(120, hero.width - 20)}px;`;
+  shell.append(probe);
+  document.body.append(shell);
+  const { term, fit } = newTerminal();
+  term.open(probe.querySelector('.pane-term'));
+  fit.fit();
+  const geo = { cols: term.cols, rows: term.rows };
+  term.dispose();
+  shell.remove();
+  if (!(geo.cols > 1 && geo.rows > 1)) return {};
+  return geo;
+}
+
 function addPane(mode) {
-  send({ type: WS_CLIENT.PANE_CREATE, spec: { deliveryMode: mode ?? dom.newPaneMode.value } });
+  const spec = { deliveryMode: mode ?? dom.newPaneMode.value, ...targetGeometry() };
+  send({ type: WS_CLIENT.PANE_CREATE, spec });
 }
 
 function addWorkspace() {
@@ -725,8 +842,6 @@ function setTraceOpen(open) {
   dom.toggleTrace.setAttribute('aria-pressed', String(open));
   setTimeout(fitAll, 170);
 }
-
-function fitAll() { for (const entry of panes.values()) fitPane(entry); }
 
 // ---------------------------------------------------------------- appearance
 
@@ -862,6 +977,32 @@ if (typeof ResizeObserver === 'function') {
 
 // working/idle dots move on a clock even when nothing else happens
 setInterval(() => { renderFleet(); renderWorkspaces(); updateVitals(); }, 3000);
+
+// Webfont swap changes cell metrics, so the geometry measured at mount can be
+// stale; re-fit once fonts settle or a TUI redraws at the wrong size.
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => requestAnimationFrame(fitAll)).catch(() => {});
+}
+
+// Test/automation handle: the stream-integrity guards are observable, so they
+// are testable. `cursor` is what proves a byte was painted exactly once.
+window.__clihive = {
+  panes,
+  get settings() { return settings; },
+  cursor: (id) => panes.get(id)?.cursor ?? 0,
+  heldCount: (id) => panes.get(id)?.held ?? 0,
+  /** Full text of one terminal buffer: 'active' | 'normal' | 'alternate'. */
+  bufferText: (id, which = 'active') => {
+    const entry = panes.get(id);
+    if (!entry) return '';
+    const buf = which === 'normal' ? entry.term.buffer.normal
+      : which === 'alternate' ? entry.term.buffer.alternate
+      : entry.term.buffer.active;
+    const lines = [];
+    for (let i = 0; i < buf.length; i += 1) lines.push(buf.getLine(i)?.translateToString(true) ?? '');
+    return lines.join('\n');
+  },
+};
 
 renderWorkspaces();
 refreshEmpty();
