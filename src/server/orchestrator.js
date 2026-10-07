@@ -37,6 +37,25 @@ Rules:
 - "actions" may be empty when nothing needs to be dispatched.
 - Reply with JSON only, no prose outside the object.`;
 
+const PLAN_SYSTEM_PROMPT = `You decompose one collaboration objective into a small task graph for managed CLI agents.
+
+Reply with JSON only:
+{
+  "acceptanceCriteria": ["criterion", "..."],
+  "tasks": [
+    { "id": "kebab-case-id", "assignee": "<agent id>", "instruction": "self-contained instruction", "dependencies": ["kebab-case-id"] }
+  ]
+}
+
+Rules:
+- At most 12 tasks. Dependencies may only reference tasks in this same list.
+- Every assignee must be exactly one of the provided agent ids.
+- Each instruction must be self-contained: the agent sees only its task text,
+  the run objective, and the summarized results of its dependencies.
+- When the objective can modify files, include an independent verification
+  task assigned to a different agent than the implementer when possible.
+- Acceptance criteria must be observable outcomes, not intentions.`;
+
 /** Pull the first balanced JSON object out of a model reply. */
 export function extractJson(text) {
   if (typeof text !== 'string') return null;
@@ -221,10 +240,6 @@ export class Orchestrator extends EventEmitter {
   }
 
   async #callModel(prompt) {
-    if (typeof this.fetchImpl !== 'function') {
-      throw new Error('no fetch implementation available');
-    }
-
     const roster = this.panes.list().map((pane) => ({
       id: pane.id,
       label: pane.label,
@@ -237,19 +252,74 @@ export class Orchestrator extends EventEmitter {
       kind: msg.kind,
       text: msg.text.slice(0, 1000),
     }));
+    const userContent = [
+      `Pane roster:\n${JSON.stringify(roster, null, 2)}`,
+      `Shared transcript (most recent last):\n${JSON.stringify(transcript, null, 2)}`,
+      `Human says:\n${prompt}`,
+    ].join('\n\n');
+    return this.#chat(SYSTEM_PROMPT, userContent);
+  }
 
+  /**
+   * Decompose an objective into a validated task-graph proposal for managed
+   * agents. Requires model mode; the CollaborationService re-validates every
+   * field (membership, dependencies, cycles) before anything is persisted.
+   *
+   * @param {object} spec
+   * @param {string} spec.objective
+   * @param {{id:string,provider:string,label:string,permissionProfile:string,cwd:string}[]} spec.agents
+   * @param {string[]|null} [spec.acceptanceCriteria] Operator criteria win over model ones.
+   * @returns {Promise<{acceptanceCriteria: string[], tasks: object[]}>}
+   */
+  async planRun({ objective, agents, acceptanceCriteria = null }) {
+    if (!this.model) {
+      throw new Error('automatic planning requires the orchestrator model (CLIHIVE_BASE_URL / CLIHIVE_API_KEY / CLIHIVE_MODEL)');
+    }
+    if (typeof objective !== 'string' || !objective.trim()) throw new Error('planRun requires an objective');
+    if (!Array.isArray(agents) || agents.length < 1) throw new Error('planRun requires at least one managed agent');
+
+    const roster = agents.map((a) => ({
+      id: a.id, provider: a.provider, label: a.label,
+      permissionProfile: a.permissionProfile, cwd: a.cwd,
+    }));
+    const userContent = [
+      `Managed agents:\n${JSON.stringify(roster, null, 2)}`,
+      `Objective:\n${objective}`,
+      acceptanceCriteria?.length ? `Operator-provided acceptance criteria (keep them verbatim):\n${JSON.stringify(acceptanceCriteria)}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    const reply = await this.#chat(PLAN_SYSTEM_PROMPT, userContent);
+    const parsed = extractJson(reply);
+    if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length < 1) {
+      this.tracer.emitTrace(TRACE.ORCH_ERROR, { error: 'planner returned no task graph' });
+      throw new Error('planner returned no task graph');
+    }
+    const criteria = Array.isArray(acceptanceCriteria) && acceptanceCriteria.length
+      ? acceptanceCriteria
+      : (Array.isArray(parsed.acceptanceCriteria) ? parsed.acceptanceCriteria.filter((c) => typeof c === 'string' && c.trim()) : []);
+    if (!criteria.length) throw new Error('planner produced no acceptance criteria');
+
+    const tasks = parsed.tasks.slice(0, 12).map((t) => ({
+      id: String(t?.id ?? ''),
+      assignee: String(t?.assignee ?? ''),
+      instruction: String(t?.instruction ?? ''),
+      dependencies: Array.isArray(t?.dependencies) ? t.dependencies.map(String) : [],
+      origin: 'planner',
+    }));
+    this.tracer.emitTrace(TRACE.ORCH_REPLY, { planner: true, taskCount: tasks.length, criteria: criteria.length });
+    this.#note({ role: 'system', text: `Planned ${tasks.length} task(s) across ${agents.length} agent(s)` });
+    return { acceptanceCriteria: criteria, tasks };
+  }
+
+  async #chat(systemPrompt, userContent) {
+    if (typeof this.fetchImpl !== 'function') {
+      throw new Error('no fetch implementation available');
+    }
     const body = {
       model: this.model.model,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [
-            `Pane roster:\n${JSON.stringify(roster, null, 2)}`,
-            `Shared transcript (most recent last):\n${JSON.stringify(transcript, null, 2)}`,
-            `Human says:\n${prompt}`,
-          ].join('\n\n'),
-        },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
       ],
       temperature: 0.2,
     };

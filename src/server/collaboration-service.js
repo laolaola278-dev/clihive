@@ -191,6 +191,18 @@ export class CollaborationService extends EventEmitter {
     return agent;
   }
 
+  /** Count one planner decision against a run's budget. */
+  async recordDecision(runId) {
+    const now = this.now();
+    await this.store.transact((state) => {
+      const run = state.tables.runs[runId];
+      if (!run) return [];
+      return [{ table: 'runs', id: runId, expectedRevision: run.revision,
+        value: entityValue(run, { decisionsUsed: (run.decisionsUsed ?? 0) + 1, updatedAt: now }) }];
+    });
+    return this.run(runId);
+  }
+
   async #executableFor(agent) {
     let executable = this.#executables.get(agent.id);
     if (!executable) {
@@ -757,12 +769,13 @@ export class CollaborationService extends EventEmitter {
       const ops = [{ table: 'runs', id: runId, expectedRevision: run.revision,
         value: entityValue(run, { state: nextState, reason, updatedAt: now }) }];
       if (nextState === 'cancelled') {
+        // Flag every non-terminal task: queued ones cancel immediately; the
+        // running one keeps its flag and lands in `cancelled` when its killed
+        // process ends and the completion path confirms.
         for (const task of Object.values(state.tables.tasks)) {
           if (task.runId !== runId || TERMINAL_TASK_STATES.includes(task.state)) continue;
-          if (task.state === 'queued' || task.state === 'awaiting_review') {
-            const patch = taskTransition(task, { type: 'cancel_requested' }, { authority: 'operator', now });
-            ops.push({ table: 'tasks', id: task.id, expectedRevision: task.revision, value: entityValue(task, patch) });
-          }
+          const patch = taskTransition(task, { type: 'cancel_requested' }, { authority: 'operator', now });
+          ops.push({ table: 'tasks', id: task.id, expectedRevision: task.revision, value: entityValue(task, patch) });
         }
       }
       return ops;

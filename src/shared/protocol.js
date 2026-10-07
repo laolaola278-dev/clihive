@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Default loopback port for the hive server. */
 export const DEFAULT_PORT = 7420;
@@ -107,6 +107,11 @@ export const WS_SERVER = Object.freeze({
   DELIVERY: 'delivery',
   TRACE: 'trace',
   ORCH_REPLY: 'orch.reply',
+  /** Managed collaboration (v2, additive; older clients may ignore these). */
+  AGENT_UPDATE: 'agent.update',
+  TASK_UPDATE: 'task.update',
+  RUN_UPDATE: 'run.update',
+  AGENT_EVENT: 'agent.event',
   ERROR: 'error',
 });
 

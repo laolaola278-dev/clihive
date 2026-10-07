@@ -21,6 +21,7 @@ import {
   ADDRESS_HUMAN,
   ADDRESS_ORCHESTRATOR,
   DEFAULT_PORT,
+  DELIVERY_CHANNELS,
   TRACE,
   WS_CLIENT,
   WS_SERVER,
@@ -31,6 +32,11 @@ import { Tracer } from './tracer.js';
 import { MessageBus } from './bus.js';
 import { PaneManager } from './panes.js';
 import { Orchestrator } from './orchestrator.js';
+import { CollaborationStore } from './collaboration-store.js';
+import { CollaborationService } from './collaboration-service.js';
+import { CollaborationError } from './collaboration-validation.js';
+import { detectCli } from './agent-runtime/adapters.js';
+import { resolveCliExecutable } from './agent-runtime/resolve-cli.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -88,7 +94,18 @@ export class HiveServer {
       panes: this.panes,
       tracer: this.tracer,
       model: options.model,
+      fetchImpl: options.fetchImpl,
     });
+
+    // Managed-agent collaboration. The durable store lives under the hive home
+    // (separate from the trimmable UI trace); tests inject a temp dir and fake
+    // adapter dependencies through `options.collaboration`.
+    this.collabDir = options.collabDir === undefined ? path.join(hiveHome(), 'collab') : options.collabDir;
+    this.collabOptions = options.collaboration ?? {};
+    /** @type {CollaborationStore|null} */
+    this.store = null;
+    /** @type {CollaborationService|null} */
+    this.collaboration = null;
 
     /** @type {Set<import('ws').WebSocket>} */
     this.clients = new Set();
@@ -159,6 +176,59 @@ export class HiveServer {
     });
   }
 
+  /**
+   * Bridge the collaboration scheduler to the window and the bus:
+   *   - durable agent/task/run updates broadcast as WS frames;
+   *   - each managed agent gets a bus sink so `hive send --to <agentId>`
+   *     persists a durable store message (at-least-once) instead of typing
+   *     into a PTY.
+   */
+  #wireCollaboration() {
+    const svc = this.collaboration;
+    svc.on('agent', (entity) => entity && this.#broadcast({ type: WS_SERVER.AGENT_UPDATE, entity }));
+    svc.on('task', (entity) => entity && this.#broadcast({ type: WS_SERVER.TASK_UPDATE, entity }));
+    svc.on('run', (entity) => entity && this.#broadcast({ type: WS_SERVER.RUN_UPDATE, entity }));
+    svc.on('agent-event', (payload) => this.#broadcast({ type: WS_SERVER.AGENT_EVENT, ...payload }));
+    for (const agent of svc.listAgents()) this.#registerAgentSink(agent.id);
+    svc.on('agent', (entity) => entity && this.#registerAgentSink(entity.id));
+  }
+
+  #registerAgentSink(agentId) {
+    if (this.bus.ptySinks.has(agentId)) return;
+    this.bus.registerPtySink(agentId, async (msg) => {
+      try {
+        await this.collaboration.deliverExternalMessage({
+          from: msg.from, to: agentId, text: msg.text,
+          runId: msg.meta?.runId ?? null,
+        });
+        // The durable copy lives in the collaboration store; the bus pull
+        // queue for this target is redundant, so drain it and record the ACK.
+        this.bus.drainInbox(agentId);
+        return { ok: true, channel: DELIVERY_CHANNELS.CLI, reason: 'queued-for-agent' };
+      } catch (err) {
+        return { ok: false, channel: null, reason: err?.message ?? String(err) };
+      }
+    });
+  }
+
+  /** Message-bus universe: live panes plus every managed agent id. */
+  #busUniverse() {
+    const ids = this.panes.aliveIds();
+    if (this.collaboration) {
+      for (const agent of this.collaboration.listAgents()) ids.push(agent.id);
+    }
+    return ids;
+  }
+
+  #collabSnapshot() {
+    if (!this.collaboration) return null;
+    return {
+      agents: this.collaboration.listAgents(),
+      runs: this.collaboration.listRuns(),
+      tasks: this.collaboration.listTasks(),
+    };
+  }
+
   #wireUpgrade() {
     this.http.on('upgrade', (req, socket, head) => {
       let url;
@@ -194,6 +264,7 @@ export class HiveServer {
       transcript: this.bus.fullTranscript(200),
       trace: this.tracer.recent(300),
       orchestrator: this.orchestrator.recent(100),
+      collaboration: this.#collabSnapshot(),
       status: this.status(),
     }));
 
@@ -265,7 +336,7 @@ export class HiveServer {
       case WS_CLIENT.SEND: {
         const result = await this.bus.publish(
           { ...frame.message, from: frame.message?.from || ADDRESS_HUMAN },
-          { origin: 'ws', paneIds: this.panes.aliveIds() },
+          { origin: 'ws', paneIds: this.#busUniverse() },
         );
         ws.send(JSON.stringify({ type: 'message.sent', ...result }));
         break;
@@ -321,6 +392,11 @@ export class HiveServer {
     return JSON.parse(text);
   }
 
+  #requireCollab() {
+    if (!this.collaboration) throw new CollaborationError('collaboration store is not available on this server', 503, 'STORE_UNAVAILABLE');
+    return this.collaboration;
+  }
+
   #authorized(req, url) {
     const header = req.headers.authorization ?? '';
     const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
@@ -334,6 +410,7 @@ export class HiveServer {
       uptimeMs: Date.now() - this.startedAt,
       panes: this.panes.info(),
       orchestrator: this.orchestrator.status(),
+      collaboration: this.collaboration ? this.collaboration.status() : null,
       clients: this.clients.size,
       tracePath: this.tracer.file,
       traceEvents: this.tracer.seq,
@@ -370,7 +447,7 @@ export class HiveServer {
         const from = body.from || process.env.CLIHIVE_PANE_ID || ADDRESS_HUMAN;
         const result = await this.bus.publish(
           { ...body, from },
-          { origin: 'cli', paneIds: this.panes.aliveIds() },
+          { origin: 'cli', paneIds: this.#busUniverse() },
         );
         this.#json(res, 200, {
           messageId: result.message.id,
@@ -468,10 +545,155 @@ export class HiveServer {
         return;
       }
 
+      // --- managed collaboration endpoints (operator token) ----------------
+      if (route === 'agents/capabilities' && method === 'GET') {
+        const capabilities = {};
+        for (const provider of ['codex', 'claude']) {
+          try {
+            const executable = await resolveCliExecutable(provider);
+            capabilities[provider] = { executable: executable.command, ...(await detectCli(executable, { timeoutMs: 30000 })) };
+          } catch (err) {
+            capabilities[provider] = { available: false, reason: err?.message ?? String(err) };
+          }
+        }
+        this.#json(res, 200, { capabilities });
+        return;
+      }
+
+      if (route === 'agents' && method === 'GET') {
+        this.#json(res, 200, { agents: this.#requireCollab().listAgents() });
+        return;
+      }
+
+      if (route === 'agents' && method === 'POST') {
+        const body = await this.#readBody(req);
+        const agent = await this.#requireCollab().registerAgent(body);
+        this.#json(res, 201, { agent });
+        return;
+      }
+
+      let m;
+      if ((m = route.match(/^agents\/([^/]+)\/messages$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const message = await this.#requireCollab().deliverExternalMessage({
+          from: body.from || ADDRESS_HUMAN,
+          to: decodeURIComponent(m[1]),
+          text: body.text,
+          runId: body.runId ?? null,
+        });
+        this.#json(res, 202, { message });
+        return;
+      }
+
+      if (route === 'runs' && method === 'GET') {
+        const svc = this.#requireCollab();
+        this.#json(res, 200, { runs: svc.listRuns().map((run) => ({ ...run, tasks: svc.listTasks(run.id) })) });
+        return;
+      }
+
+      if (route === 'runs' && method === 'POST') {
+        const body = await this.#readBody(req);
+        const svc = this.#requireCollab();
+        const { tasks: _ignoredTasks, plan, ...runInput } = body;
+        let taskInputs = Array.isArray(body.tasks) ? body.tasks : [];
+        let acceptanceCriteria = body.acceptanceCriteria ?? null;
+        if (plan) {
+          const agents = (body.agentIds ?? []).map((id) => svc.agent(id)).filter(Boolean);
+          const planned = await this.orchestrator.planRun({
+            objective: body.objective, agents, acceptanceCriteria,
+          });
+          taskInputs = planned.tasks;
+          acceptanceCriteria = planned.acceptanceCriteria;
+        }
+        const run = await svc.createRun({ ...runInput, acceptanceCriteria }, taskInputs);
+        if (plan) await svc.recordDecision(run.id);
+        this.#json(res, 201, { run, tasks: svc.listTasks(run.id) });
+        return;
+      }
+
+      if ((m = route.match(/^runs\/([^/]+)$/)) && method === 'GET') {
+        const svc = this.#requireCollab();
+        const run = svc.run(decodeURIComponent(m[1]));
+        if (!run) { this.#json(res, 404, { error: 'unknown run' }); return; }
+        this.#json(res, 200, { run, tasks: svc.listTasks(run.id) });
+        return;
+      }
+
+      if ((m = route.match(/^runs\/([^/]+)\/state$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const run = await this.#requireCollab().setRunState(decodeURIComponent(m[1]), body.state, {
+          expectedRevision: body.expectedRevision, reason: body.reason ?? null,
+        });
+        this.#json(res, 200, { run });
+        return;
+      }
+
+      if ((m = route.match(/^runs\/([^/]+)\/respond$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const run = await this.#requireCollab().respondToRun(decodeURIComponent(m[1]), {
+          text: body.text, expectedRevision: body.expectedRevision,
+        });
+        this.#json(res, 200, { run });
+        return;
+      }
+
+      if ((m = route.match(/^runs\/([^/]+)\/tasks$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const tasks = await this.#requireCollab().addTasks(decodeURIComponent(m[1]), body.tasks ?? []);
+        this.#json(res, 201, { tasks });
+        return;
+      }
+
+      if (route === 'tasks' && method === 'GET') {
+        const runId = url.searchParams.get('run');
+        this.#json(res, 200, { tasks: this.#requireCollab().listTasks(runId) });
+        return;
+      }
+
+      if ((m = route.match(/^tasks\/([^/]+)$/)) && method === 'GET') {
+        const svc = this.#requireCollab();
+        const task = svc.task(decodeURIComponent(m[1]));
+        if (!task) { this.#json(res, 404, { error: 'unknown task' }); return; }
+        this.#json(res, 200, { task, receipts: svc.receiptsForTask(task.id) });
+        return;
+      }
+
+      if ((m = route.match(/^tasks\/([^/]+)\/review$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const task = await this.#requireCollab().reviewTask(decodeURIComponent(m[1]), {
+          approved: body.approved, evidence: body.evidence, expectedRevision: body.expectedRevision,
+        });
+        this.#json(res, 200, { task });
+        return;
+      }
+
+      if ((m = route.match(/^tasks\/([^/]+)\/cancel$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const task = await this.#requireCollab().cancelTask(decodeURIComponent(m[1]), { expectedRevision: body.expectedRevision });
+        this.#json(res, 200, { task });
+        return;
+      }
+
+      if ((m = route.match(/^tasks\/([^/]+)\/retry$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const task = await this.#requireCollab().retryTask(decodeURIComponent(m[1]), {
+          reason: body.reason,
+          previousProcessStopped: body.previousProcessStopped,
+          sideEffectsReviewed: body.sideEffectsReviewed,
+          expectedRevision: body.expectedRevision,
+        });
+        this.#json(res, 200, { task });
+        return;
+      }
+
       this.#json(res, 404, { error: `unknown route: ${route}` });
     } catch (err) {
       if (err instanceof ProtocolError) {
         this.#json(res, 400, { error: err.message, field: err.field });
+        return;
+      }
+      if (err instanceof CollaborationError) {
+        this.#json(res, err.statusCode ?? 400, { error: err.message, code: err.code ?? null });
         return;
       }
       if (err instanceof SyntaxError) {
@@ -543,12 +765,30 @@ export class HiveServer {
       tracePath: this.tracer.file,
     });
 
+    // Bring up the durable collaboration store and its scheduler. A failure
+    // here is fatal: managed agents must never run without durable state.
+    if (this.collabDir) {
+      this.store = await CollaborationStore.open(this.collabDir);
+      this.collaboration = new CollaborationService({
+        store: this.store,
+        bus: this.bus,
+        tracer: this.tracer,
+        ...this.collabOptions,
+      });
+      await this.collaboration.init();
+      this.#wireCollaboration();
+    }
+
     return { url: this.url, token: this.token };
   }
 
   /** Stop everything: panes, sockets, listener, trace flush. */
   async close() {
     this.tracer.emitTrace(TRACE.HIVE_STOP, { uptimeMs: Date.now() - this.startedAt });
+    if (this.collaboration) {
+      await this.collaboration.close();
+      this.collaboration = null;
+    }
     this.panes.killAll();
     for (const ws of this.clients) {
       try {
@@ -560,6 +800,12 @@ export class HiveServer {
     this.clients.clear();
     await new Promise((resolve) => this.wss.close(resolve));
     await new Promise((resolve) => this.http.close(resolve));
+    if (this.store) {
+      // Let fire-and-forget scheduling tails finish before the journal closes.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await this.store.close();
+      this.store = null;
+    }
     await this.tracer.drain();
   }
 }
