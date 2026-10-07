@@ -110,6 +110,15 @@ describe('formatForPty', () => {
     assert.ok(!out.includes('['), 'stdin block has no ansi');
   });
 
+  it('stdin mode with eol CR terminates every line like Enter (ConPTY)', () => {
+    // Windows ConPTY buffers typed input until it sees CR; a lone LF never
+    // reaches the child process. The win32 caller passes eol:'\r'.
+    const out = formatForPty(msg, { label: 'beta', mode: DELIVERY_MODES.STDIN, eol: '\r' });
+    assert.ok(out.includes('(msg_x)\r'), 'header line ends with CR');
+    assert.ok(out.includes('hi\rthere\r'), 'body lines end with CR');
+    assert.ok(!out.includes('\n'), 'no bare LF remains');
+  });
+
   it('display mode uses CRLF and dims the header', () => {
     const out = formatForPty(msg, { label: 'beta', mode: DELIVERY_MODES.DISPLAY });
     assert.ok(out.includes('\r\n'));

@@ -331,7 +331,11 @@ export class PaneManager extends EventEmitter {
     if (pane.exit !== null) return { ok: false, channel: null, reason: 'pane-exited' };
 
     if (pane.deliveryMode === DELIVERY_MODES.STDIN) {
-      const block = formatForPty(msg, { label: pane.label, mode: DELIVERY_MODES.STDIN });
+      // Typed input must end lines with the platform's Enter: ConPTY buffers
+      // until CR, POSIX canonical mode delivers on LF. Without this the child
+      // process never sees the message — the screen echo lies about delivery.
+      const eol = process.platform === 'win32' ? '\r' : '\n';
+      const block = formatForPty(msg, { label: pane.label, mode: DELIVERY_MODES.STDIN, eol });
       try {
         pane.pty.write(block);
         return { ok: true, channel: DELIVERY_CHANNELS.PTY };

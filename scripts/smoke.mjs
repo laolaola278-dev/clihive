@@ -1,11 +1,12 @@
-﻿// End-to-end smoke test against a real hive with real PTYs.
+// End-to-end smoke test against a real hive with real PTYs.
 //
 //   node scripts/smoke.mjs
 //
 // Covers the load-bearing claims:
 //   - a pane can talk to every other pane with `hive send`
 //   - a display-mode pane shows the message without its shell executing it
-//   - a stdin-mode pane receives the message as process input
+//   - a stdin-mode pane's *program* reads the message as process input
+//     (a real stdin reader, not a shell that would execute the text)
 //   - the shared transcript is visible to peers
 //   - the trace records send -> fanout -> deliver -> ack
 //   - the orchestrator can address the whole hive
@@ -81,8 +82,17 @@ try {
 
   const a = await server.createPane({ label: 'alpha' });
   const b = await server.createPane({ label: 'beta' });
-  const c = await server.createPane({ label: 'agentish', deliveryMode: 'stdin' });
+  // A stdin-mode pane must run a program that READS stdin — a shell would try
+  // to execute the notification text as a command, which proves nothing about
+  // stdin delivery. This reader echoes every line with a marker we can assert.
+  const c = await server.createPane({
+    label: 'agentish',
+    deliveryMode: 'stdin',
+    command: process.execPath,
+    args: ['-e', "process.stdout.write('READER-UP\\n');process.stdin.on('data',(d)=>{for(const l of String(d).split(/\\r?\\n/)){if(l.trim())process.stdout.write('STDIN-RECEIVED: '+l+'\\n')}})"],
+  });
   await sleep(1800);
+  await waitFor(() => shows(c.id, 'READER-UP'), 'stdin reader process started and its output was captured');
 
   check(a.deliveryMode === 'display', 'panes default to display delivery');
   check(c.deliveryMode === 'stdin', 'stdin delivery is opt-in per pane');
@@ -106,8 +116,21 @@ try {
   check(!/is not recognized|不是内部或外部命令|command not found/.test(betaText),
     'display-mode pane did not execute the message as a command');
 
-  await waitFor(() => shows(c.id, marker), 'message reached the stdin-mode pane');
-  check(true, 'stdin-mode pane received the message as input');
+  let cReached = false;
+  try {
+    await waitFor(() => { cReached = shows(c.id, marker); return cReached; }, 'message reached the stdin-mode pane', 8000);
+  } catch (err) {
+    // Dump the pane's real state so a failure is diagnosable, then fail.
+    process.stdout.write(`DEBUG c record: ${JSON.stringify(server.panes.list().find((p) => p.id === c.id))}\n`);
+    process.stdout.write(`DEBUG c scrollback: ${JSON.stringify(stripAnsi(server.panes.scrollback(c.id)).slice(0, 300))}\n`);
+    process.stdout.write(`DEBUG delivery: ${JSON.stringify(server.bus.deliveryReport(sent.id).targets)}\n`);
+    throw err;
+  }
+  // The decisive stdin check: the child program itself must have read the line
+  // and echoed it back with its marker — the text went through the process,
+  // not just onto a screen.
+  await waitFor(() => shows(c.id, 'STDIN-RECEIVED'), 'stdin-mode child program read and echoed the message');
+  check(true, 'stdin-mode pane received the message as process input');
 
   const report = server.bus.deliveryReport(sent.id);
   const byTarget = new Map(report.targets.map((t) => [t.target, t]));
@@ -158,6 +181,12 @@ try {
       && shows(c.id, `standup ${marker}`),
     'orchestrator broadcast in every pane',
   );
+  // The stdin pane must show the reader's echo too (it consumed the broadcast).
+  const cText = flat(c.id);
+  check((cText.match(/STDIN-RECEIVED/g) ?? []).length >= 2,
+    'stdin reader echoed every message it was sent');
+  check(!/is not recognized|不是内部或外部命令|command not found/.test(cText),
+    'stdin-mode pane never executed a message as a shell command');
   check(true, 'orchestrator reached all three panes');
 
   // --- trace persistence --------------------------------------------------

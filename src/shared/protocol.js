@@ -275,8 +275,14 @@ export function resolveTargets(msg, paneIds) {
  * `mode: 'display'` wraps it in a dim frame and uses CRLF, because it is
  * painted straight into the terminal viewport rather than typed into a shell.
  *
+ * `mode: 'stdin'` is TYPED into the pty, so its line ending must be the one
+ * the platform's terminal line discipline treats as Enter: POSIX canonical
+ * mode delivers a line on LF, but Windows ConPTY buffers typed input until
+ * it sees CR — a lone LF never reaches the child process. Callers on win32
+ * pass `eol: '\r'`.
+ *
  * @param {{id: string, from: string, to: string, kind: string, text: string}} msg
- * @param {{ label?: string, mode?: string }} [opts]
+ * @param {{ label?: string, mode?: string, eol?: string }} [opts]
  */
 export function formatForPty(msg, opts = {}) {
   const label = opts.label ? ` ${opts.label}` : '';
@@ -289,7 +295,9 @@ export function formatForPty(msg, opts = {}) {
     const lines = body.split('\n');
     return `\r\n\u001b[2m${head}\u001b[0m\r\n${lines.join('\r\n')}\r\n`;
   }
-  return `${head}\n${body}\n`;
+  const eol = opts.eol === '\r' ? '\r' : '\n';
+  const bodyLines = body.split('\n').join(eol);
+  return `${head}${eol}${bodyLines}${eol}`;
 }
 
 /** Strip ANSI escape sequences so trace/log output stays readable. */
