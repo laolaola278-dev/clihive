@@ -6,6 +6,12 @@ coordinates their work. Every message lands on a shared transcript that any
 pane can read, and every delivery is traced, so you can always answer:
 *did that pane actually receive it?*
 
+On top of the terminals, clihive runs **managed agents**: codex and claude
+driven through their structured CLI interfaces (not keyboard simulation),
+working on persisted tasks with permission boundaries, a durable message
+queue, and an operator review gate. Two modes, one window: your native
+terminal panes stay manual; managed agent panes are orchestrated.
+
 ```
 ┌─────────────────────────── titlebar 36px ────────────────────────────┐
 ├──────────┬───────────────────────────────────┬───────────────────────┤
@@ -31,8 +37,18 @@ pane can read, and every delivery is traced, so you can always answer:
   claude, gemini, qwen, aider, opencode, amp, goose, dsh, shells, node,
   python — from its command line (`src/server/cli-profiles.js`). The pane wears
   that CLI's badge and accent color, and its safe delivery default is chosen
-  for it: agent CLIs get messages on `stdin` (which *is* their prompt), shells
-  and unknown tools get non-destructive `display` painting.
+  for it: programs that read stdin as their prompt can opt into `stdin`
+  delivery (typed lines are CR-terminated so Windows ConPTY actually releases
+  them to the child); shells and unknown tools get non-destructive `display`
+  painting. Full-screen TUIs (like an interactive codex/claude session) are
+  never fed simulated keystrokes — orchestrate those as *managed agents*
+  instead (below).
+- **Managed agents (dual mode).** Register a codex or claude agent; it runs
+  headless through its structured CLI (`codex exec --json`, `claude -p
+  --output-format stream-json`), one task at a time, inside a permission
+  boundary. Tasks persist across restarts, results come back as validated
+  JSON, "done" only ever means *awaiting review*, and an operator approves
+  with evidence. See [Managed collaboration](#managed-collaboration).
 - **Key fields light up.** The shared transcript highlights `from` / `to` and
   badges the message kind; trace rows render every field as a dim key + lit
   value, with the load-bearing ones (paneId, target, channel, ok, held,
@@ -108,7 +124,12 @@ because anything on their stdin would be executed.
 | mode | what happens | when to use it |
 |------|--------------|----------------|
 | `display` *(default for shells & unknown)* | The message is **painted into the pane's viewport**. The child process is never touched, so a plain shell will not try to execute the text. | shells, REPLs, anything that treats stdin as commands |
-| `stdin` *(default for recognized agents)* | The message is **written to the process's stdin**, so the program reads it as input. | agent CLIs whose stdin *is* their prompt |
+| `stdin` *(default for recognized agents)* | The message is **typed into the process's stdin**, line-terminated with the platform's Enter — CR on Windows (ConPTY buffers typed input until it sees CR; a bare LF never reaches the child), LF on POSIX. | programs that read stdin as their prompt |
+
+For a *structured* conversation with codex/claude, do not type into their
+TUIs at all — register them as [managed agents](#managed-collaboration) and
+let the hive drive their headless CLI interfaces with durable queues and
+receipts.
 
 Both modes also queue the message for **pull**: `hive inbox` inside the pane
 returns the message and acknowledges it. That pull is the acknowledgement —
@@ -151,6 +172,49 @@ absolute-positioned frames arrive.
 Panes are spawned at the size the grid will actually show them at, so a TUI does
 not draw its opening frames for one geometry and then repaint for another.
 
+## Managed collaboration
+
+The dual-mode core: the terminal panes above stay manual; **managed agents**
+run real work with guarantees a terminal cannot offer. An agent is a headless
+codex/claude process the hive drives through its structured CLI — never
+keystrokes into a TUI.
+
+- **Adapters, verified against real CLIs.** Only codex and claude are
+  *adapted* (other CLIs are merely *recognized* for styling and cannot be
+  managed):
+  - `codex-cli 0.160.0` — `codex exec --json --skip-git-repo-check -C <cwd>
+    --sandbox <profile> --output-schema <file>`, prompt on stdin, session
+    resume via `codex exec resume <SESSION_ID> -`.
+  - `claude 2.1.287 (Claude Code)` — `claude -p --verbose --output-format
+    stream-json --json-schema <inline>`, `--permission-mode plan` for
+    read-only / `acceptEdits` + explicit `--allowedTools` for workspace-write,
+    `--add-dir <cwd>`, `--resume <id>`.
+  - Hard rules: prompt via stdin only, no shell interpretation, no
+    danger/bypass/approve-for-me flags, unknown permission profiles degrade to
+    read-only. Both adapters passed a real end-to-end acceptance run
+    (2026-10-07, evidence in `docs/acceptance-real-2026-10-07.md`).
+- **Permission boundary.** Effective permission = intersection of the agent's
+  profile and the run's profile, default read-only. Model-generated tasks can
+  never elevate it. Denials surface as `permission_denied` events and the
+  agent must report itself blocked.
+- **Persisted state.** Agents/runs/tasks/messages/receipts live in a
+  checksummed JSONL journal under `~/.clihive/collab` (CAS on every write).
+  A restart recovers in-flight tasks as `uncertain`; retry requires operator
+  confirmation that the previous process stopped and side effects were
+  reviewed.
+- **Review gate.** A task reporting `done` lands in `awaiting_review` — never
+  `completed`. The operator approves with evidence or rejects with a reason.
+  Peer messages are durable (at-least-once) and ride the recipient's next
+  turn; message-turns are service-reviewed automatically.
+- **Budgets.** Per-run limits: concurrency, decisions, agent turns, task/run
+  timeouts, handoff depth, messages per turn. Exhaustion pauses the run with
+  a `budget-exhausted:<limit>` question instead of burning on.
+- **Operators.** The right deck's **⚙ collab** tab (register agents, start
+  runs, pause/cancel, approve/reject tasks, answer blocked questions, live
+  agent event stream) and the `hive` CLI below. The optional planner (needs a
+  model endpoint) turns an objective into ≤12 tasks with observable acceptance
+  criteria and an independent verification task.
+
 ## Run it
 
 ```bash
@@ -176,6 +240,22 @@ hive inbox                       # read + acknowledge what was sent to me
 hive read                        # the shared transcript for this window
 hive trace --message msg_xxx     # how a message actually travelled
 hive trace --prefix msg.         # the message lifecycle, live
+```
+
+Collaboration commands (managed agents — work from anywhere with the token):
+
+```bash
+hive capabilities                        # which managed CLIs this machine really has
+hive agents                              # list managed agents + state
+hive agents add codex --label review --cwd C:\repo --permission read-only
+hive run "audit the auth module" --agents agt_x,agt_y --plan --criteria "no secrets logged"
+hive run "fix issue 42" --agents agt_x --tasks-file tasks.json
+hive runs                                # list; also: pause|resume|cancel <runId>|respond <runId> <text>
+hive tasks --run run_x                   # list; also: show <id>
+hive tasks review <id> --approve --evidence "tests green, diff reviewed"
+hive tasks review <id> --reject --reason "missed the edge case in X"
+hive tasks cancel <id> --reason "obsolete"
+hive tasks retry <id> --reason "process confirmed stopped" --stopped --reviewed
 ```
 
 ## Orchestrator
@@ -217,21 +297,35 @@ Every route is loopback-only and needs the startup token (`Authorization: Bearer
 | `/api/delivery?message=msg_xxx` | GET | full delivery report: pushed, acked, channels, reasons |
 | `/api/orchestrator[?limit=100]` | GET | orchestrator status + recent turns |
 | `/api/orchestrator/ask` | POST | `{text, to}` — relay or ask the model |
-| `/api/status` | GET | url, pane counts, orchestrator mode, client count, trace path |
+| `/api/status` | GET | url, pane counts, orchestrator mode, client count, trace path, collaboration store status |
+| `/api/agents/capabilities` | GET | real probe: resolved executable + version per provider |
+| `/api/agents` | GET / POST | list / register managed agents (`{provider,label,cwd,permissionProfile}`) |
+| `/api/agents/:id/messages` | POST | durable peer message (202; rides the agent's next turn) |
+| `/api/runs`, `/api/runs/:id` | GET / POST | list·inspect / create (`plan:true` uses the model planner) |
+| `/api/runs/:id/state`, `/api/runs/:id/respond` | POST | pause·resume·cancel / answer a blocked run's question |
+| `/api/runs/:id/tasks`, `/api/tasks[/:id]` | GET / POST | list·add / inspect tasks (with receipts) |
+| `/api/tasks/:id/review`, `/cancel`, `/retry` | POST | approve (`evidence`) or reject / cancel / retry (needs stop + side-effect confirmation) |
 
 The window itself connects over WebSocket at `/ws` and receives `hello`,
 `pane.list`, `pane.created`, `pane.data`, `pane.exit`, `message`, `delivery`,
-`trace` and `orch.reply` frames; it sends `pane.create`, `pane.input`,
-`pane.resize`, `pane.kill`, `pane.subscribe`, `message.send` and `orch.ask`.
+`trace` and `orch.reply` frames, plus (protocol v2, additive) `agent.update`,
+`task.update`, `run.update` and `agent.event`; it sends `pane.create`,
+`pane.input`, `pane.resize`, `pane.kill`, `pane.subscribe`, `message.send` and
+`orch.ask`.
 
 ## Testing
 
 ```bash
-npm test                    # unit tests (protocol, bus, tracer, orchestrator, terminal modes, CLI profiles)
-node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack
-node scripts/verify-ui.mjs  # drives the real window in Chromium
+npm test                    # unit/API tests incl. collaboration (fake CLIs — simulated, NOT proof of real collaboration)
+node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack, stdin reader
+node scripts/verify-ui.mjs  # drives the real window in Chromium (incl. the collab panel)
 npm run check               # parse every source file
+node scripts/acceptance-real.mjs   # REAL codex + claude run; writes .artifacts evidence (needs both CLIs logged in)
 ```
+
+Simulated tests and real acceptance are reported separately on purpose. The
+latest real-CLI record, including a failed first attempt, is
+[docs/acceptance-real-2026-10-07.md](docs/acceptance-real-2026-10-07.md).
 
 ## Layout
 
@@ -245,6 +339,10 @@ src/
     cli-profiles.js    recognizes each pane's CLI (identity, accent, safe default)
     tracer.js          append-only JSONL trace + in-memory ring
     orchestrator.js    the right-hand window: manual relay or model
+    collaboration-*.js durable store, validation, task state machine, result
+                       parsing, service (queue, scheduling, review, budgets)
+    agent-runtime/     codex/claude adapters, JSONL parsing, CLI resolution,
+                       turn prompt + result schema
     http.js            HTTP/JSON API + WebSocket + static serving
     index.js           entry point
   cli/hive.js          the command a pane uses to talk to the hive
@@ -259,6 +357,14 @@ bin/hive               shim so `hive` resolves inside a pane
   environment.
 - `stdin` delivery writes to a process's input. Only use it for panes whose
   program reads stdin as a prompt; for a plain shell use the default `display`.
+- Managed agents never receive the hive token or `CLIHIVE_PANE_*` variables
+  (credential separation); their env carries only `CLIHIVE_MANAGED_AGENT=1` and
+  their agent id. They run in the cwd you register, read-only by default;
+  `workspace-write` requires both the agent and the run to opt in, and no
+  danger/bypass/approve-for-me flag is ever passed to a CLI.
+- Collaboration state fails closed: a corrupt journal poisons the store (HTTP
+  503) rather than guessing; a second server on the same home is refused by a
+  writer lock.
 
 ## License
 
