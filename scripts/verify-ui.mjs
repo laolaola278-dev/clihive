@@ -55,7 +55,19 @@ function findChromium() {
 const home = await mkdtemp(path.join(os.tmpdir(), 'clihive-ui-'));
 process.env.CLIHIVE_HOME = home;
 
-const server = new HiveServer({ rootDir: root, port: 0, tracePath: path.join(home, 'trace.jsonl') });
+const server = new HiveServer({
+  rootDir: root,
+  port: 0,
+  tracePath: path.join(home, 'trace.jsonl'),
+  // Deterministic managed-agent fakes: the UI check must not depend on which
+  // real CLIs this machine has, and must never execute a real agent turn.
+  collaboration: {
+    resolveExecutable: async (name) => ({ command: `fake-${name}`, prependArgs: [], resolvedFrom: 'test' }),
+    detect: async () => ({ available: true, version: 'fake-1.0' }),
+    runTurnImpl: () => new Promise(() => {}),
+    killTree: (child) => child.kill?.('SIGKILL'),
+  },
+});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let failed = false;
@@ -184,6 +196,71 @@ try {
   check((await page.locator('.titlebar').boundingBox()).height === 36, 'titlebar is 36px');
   check(await page.locator('#fleet').isVisible(), 'fleet roster visible in the deck');
   check((await page.locator('.fleet-row').count()) >= 2, 'fleet lists both panes');
+
+  // --- managed collaboration panel ----------------------------------------
+  const collabTab = page.locator('.dtab[data-tab="collab"]');
+  await collabTab.waitFor({ state: 'visible', timeout: 10000 });
+  await collabTab.click({ timeout: 10000 });
+  await page.waitForSelector('.dpanel[data-panel="collab"].is-active', { timeout: 5000 });
+  check(await page.locator('#collab-panel').isVisible(), 'collaboration tab activates its panel');
+
+  // Register a managed agent through the form (fake CLI, injected above).
+  await page.selectOption('#ca-provider', 'codex');
+  await page.fill('#ca-label', 'UI Codex');
+  await page.click('#collab-agent-form button[type="submit"]');
+  await page.waitForFunction(
+    () => document.querySelectorAll('#collab-agents .collab-row').length >= 1, null, { timeout: 10000 },
+  );
+  check(true, 'registered agent renders as a card in the panel');
+  const agentRow = (await page.locator('#collab-agents .collab-row').first().innerText()).toLowerCase();
+  check(agentRow.includes('ui codex') && agentRow.includes('idle'),
+    `agent card shows label and real state (${agentRow.replace(/\s+/g, ' ')})`);
+
+  // The composer must now offer the managed agent as a message target.
+  const targetOpts = await page.locator('#orch-target option').allTextContents();
+  check(targetOpts.some((t) => t.includes('UI Codex')),
+    'composer target list includes the managed agent (durable queue, not PTY typing)');
+
+  // Create a run with explicit criteria (no model planning in this script).
+  await page.fill('#cr-objective', 'UI verification run');
+  await page.fill('#cr-criteria', 'Panel renders; state stays honest');
+  await page.click('#collab-run-form button[type="submit"]');
+  await page.waitForFunction(
+    () => document.querySelectorAll('#collab-runs .collab-row-run').length >= 1, null, { timeout: 10000 },
+  );
+  check(true, 'created run renders with its state badge');
+  const runRow = (await page.locator('#collab-runs .collab-row-run').first().innerText()).toLowerCase();
+  check(runRow.includes('ui verification run') && runRow.includes('active'),
+    `run row shows objective and state (${runRow.replace(/\s+/g, ' ')})`);
+
+  // Pause the run through its inline action and watch the badge follow.
+  await page.locator('#collab-runs .collab-row-run').first().locator('button', { hasText: 'pause' }).click();
+  await page.waitForFunction(
+    () => document.querySelector('#collab-runs .collab-row-run')?.textContent.includes('paused'),
+    null, { timeout: 10000 },
+  );
+  check(true, 'run pause action updates the badge via server state (not local guesswork)');
+
+  // A message to the agent must land in the durable store, and the paused run
+  // must not claim any task ran: nothing was dispatched in this test.
+  const agentOptionValue = await page.locator('#orch-target option', { hasText: 'UI Codex' }).getAttribute('value');
+  await page.selectOption('#orch-target', agentOptionValue);
+  await page.fill('#orch-input', 'status please');
+  await page.keyboard.press('Enter');
+  await sleep(800);
+  const collabAfterMessage = await page.evaluate(async () => {
+    const tok = new URLSearchParams(location.search).get('token');
+    const res = await fetch('/api/status', { headers: { authorization: `Bearer ${tok}` } });
+    return (await res.json()).collaboration;
+  });
+  check(collabAfterMessage.tasks.length === 0,
+    'a message to an agent in a paused run dispatches nothing (no phantom tasks)');
+  const agentMsg = await page.evaluate(async () => {
+    const tok = new URLSearchParams(location.search).get('token');
+    const res = await fetch('/api/runs', { headers: { authorization: `Bearer ${tok}` } });
+    return (await res.json()).runs.length;
+  });
+  check(agentMsg === 1, `exactly one run exists after the panel flow (${agentMsg})`);
 
   // palette
   await page.keyboard.press('Control+k');

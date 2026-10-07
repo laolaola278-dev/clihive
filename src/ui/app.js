@@ -52,6 +52,30 @@ const dom = {
   fleet: $('fleet'),
   fleetLabel: $('fleet-label'),
   fleetList: $('fleet-list'),
+  collabPanel: $('collab-panel'),
+  collabAgents: $('collab-agents'),
+  collabAgentsLabel: $('collab-agents-label'),
+  collabAgentForm: $('collab-agent-form'),
+  caProvider: $('ca-provider'),
+  caPermission: $('ca-permission'),
+  caLabel: $('ca-label'),
+  caCwd: $('ca-cwd'),
+  collabRuns: $('collab-runs'),
+  collabRunsLabel: $('collab-runs-label'),
+  collabRunForm: $('collab-run-form'),
+  crObjective: $('cr-objective'),
+  crAgents: $('cr-agents'),
+  crCriteria: $('cr-criteria'),
+  crPermission: $('cr-permission'),
+  crPlan: $('cr-plan'),
+  crHint: $('cr-hint'),
+  collabTasks: $('collab-tasks'),
+  collabTasksLabel: $('collab-tasks-label'),
+  collabEvents: $('collab-events'),
+  collabQuestion: $('collab-question'),
+  collabQText: $('collab-q-text'),
+  collabQInput: $('collab-q-input'),
+  collabQSend: $('collab-q-send'),
   vitalRunning: $('vital-running'),
   vitalRunningN: $('vital-running-n'),
   vitalAttention: $('vital-attention'),
@@ -531,6 +555,11 @@ function syncTargets() {
     o.value = id; o.textContent = `${id} · ${entry.pane.label}`;
     dom.orchTarget.append(o);
   }
+  for (const agent of collab.agents) {
+    const o = document.createElement('option');
+    o.value = agent.id; o.textContent = `⚙ ${agent.label || agent.provider} · ${agent.id.slice(0, 10)}`;
+    dom.orchTarget.append(o);
+  }
   dom.orchTarget.value = [...dom.orchTarget.options].some((o) => o.value === prev) ? prev : 'all';
   updateComposerHint();
 }
@@ -540,6 +569,10 @@ function updateComposerHint() {
   if (t === 'all') {
     const alive = [...panes.values()].filter((e) => e.pane.alive).length;
     dom.composerHint.textContent = `relays to ${alive} pane(s)`;
+    return;
+  }
+  if (collab.agents.some((a) => a.id === t)) {
+    dom.composerHint.textContent = `relays to managed agent ${t} — queued durably, rides its next turn`;
     return;
   }
   // Single target: say which CLI it is and how the message will physically
@@ -707,6 +740,7 @@ function handleFrame(frame) {
       for (const m of frame.transcript ?? []) renderSharedMessage(m);
       for (const e of frame.orchestrator ?? []) renderOrchEntry(e);
       for (const e of frame.trace ?? []) pushTrace(e);
+      applyCollabSnapshot(frame.collaboration);
       applyStatus(frame.status);
       break;
     }
@@ -739,6 +773,10 @@ function handleFrame(frame) {
     case 'delivery': noteDelivery(frame.delivery); break;
     case 'trace': pushTrace(frame.event); break;
     case 'orch.reply': renderOrchEntry(frame.entry); break;
+    case 'agent.update': upsertCollab('agents', frame.entity); renderCollab(); syncTargets(); break;
+    case 'task.update': upsertCollab('tasks', frame.entity); renderCollab(); break;
+    case 'run.update': upsertCollab('runs', frame.entity); renderCollab(); break;
+    case 'agent.event': pushAgentEvent(frame); break;
     case 'error': setStatus(`error: ${frame.error}`, 'down'); break;
     default: break;
   }
@@ -754,6 +792,299 @@ function applyStatus(status) {
   if (!status) return;
   setStatus(`${status.panes?.alive ?? 0} pane(s) · ${status.traceEvents ?? 0} events`, 'live');
 }
+
+// ---------------------------------------------------------------- managed collaboration
+
+/** Mirrors the durable server state; updated from hello + WS entity frames. */
+const collab = { agents: [], runs: [], tasks: [] };
+
+async function api(route, { method = 'GET', body } = {}) {
+  const res = await fetch(`/api/${route}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+  return json;
+}
+
+function applyCollabSnapshot(snapshot) {
+  if (!snapshot) return;
+  collab.agents = snapshot.agents ?? [];
+  collab.runs = snapshot.runs ?? [];
+  collab.tasks = snapshot.tasks ?? [];
+  renderCollab();
+  syncTargets();
+}
+
+function upsertCollab(key, entity) {
+  if (!entity || !entity.id) return;
+  const i = collab[key].findIndex((x) => x.id === entity.id);
+  if (i >= 0) collab[key][i] = entity;
+  else collab[key].push(entity);
+}
+
+function pushAgentEvent(frame) {
+  const ev = frame.event ?? {};
+  const line = document.createElement('div');
+  line.className = 'trace-line collab-event';
+  let detail = '';
+  if (ev.type === 'text') detail = String(ev.text ?? '').slice(0, 200);
+  else if (ev.type === 'tool') detail = `${ev.name ?? 'tool'} ${ev.status ?? ''}`;
+  else if (ev.type === 'result') detail = `result: ${ev.outcome ?? '?'} — ${String(ev.summary ?? '').slice(0, 120)}`;
+  else if (ev.type === 'permission_denied') detail = `permission denied: ${ev.reason ?? ''}`;
+  else if (ev.type === 'error') detail = `error: ${ev.message ?? ''}`;
+  else if (ev.type === 'exit') detail = `exit ${ev.code ?? '?'}`;
+  else detail = JSON.stringify(ev).slice(0, 160);
+  line.textContent = `${time(Date.now())} ${frame.agentId ?? '?'} [${ev.type ?? '?'}] ${detail}`;
+  appendTo(dom.collabEvents, line, 300);
+}
+
+const STATE_CLASS = {
+  idle: 'ok', running: 'busy', awaiting_review: 'warn', completed: 'ok',
+  failed: 'bad', cancelled: 'off', uncertain: 'bad', queued: 'off',
+  active: 'ok', paused: 'warn',
+};
+
+function badge(state) {
+  const span = document.createElement('span');
+  span.className = `collab-badge st-${STATE_CLASS[state] ?? 'off'}`;
+  span.textContent = state;
+  return span;
+}
+
+function renderCollab() {
+  if (!dom.collabPanel) return;
+  dom.collabAgentsLabel.innerHTML = `Agents &middot; ${collab.agents.length}`;
+  dom.collabRunsLabel.innerHTML = `Runs &middot; ${collab.runs.length}`;
+  dom.collabTasksLabel.innerHTML = `Tasks &middot; ${collab.tasks.length}`;
+
+  // --- agents -------------------------------------------------------------
+  dom.collabAgents.textContent = '';
+  for (const a of collab.agents) {
+    const row = document.createElement('div');
+    row.className = 'collab-row';
+    const name = document.createElement('span');
+    name.className = 'collab-name';
+    name.textContent = `${a.label || a.provider} · ${a.id.slice(0, 12)}`;
+    name.title = `${a.provider} ${a.capabilities?.version ?? ''}\n${a.cwd}`;
+    row.append(name, badge(a.state));
+    const perm = document.createElement('span');
+    perm.className = 'collab-dim';
+    perm.textContent = a.permissionProfile;
+    row.append(perm);
+    if (a.capabilities?.available !== true) {
+      const bad = document.createElement('span');
+      bad.className = 'collab-dim st-bad';
+      bad.textContent = `CLI unavailable: ${a.capabilities?.reason ?? '?'}`;
+      row.append(bad);
+    }
+    dom.collabAgents.append(row);
+  }
+
+  // --- run form agent picker ----------------------------------------------
+  dom.crAgents.textContent = '';
+  for (const a of collab.agents) {
+    const label = document.createElement('label');
+    label.className = 'collab-check';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = a.id;
+    box.checked = collab.runs.length === 0;
+    box.disabled = a.capabilities?.available !== true;
+    label.append(box, document.createTextNode(` ${a.label || a.provider}`));
+    dom.crAgents.append(label);
+  }
+
+  // --- runs ----------------------------------------------------------------
+  dom.collabRuns.textContent = '';
+  for (const r of collab.runs) {
+    const row = document.createElement('div');
+    row.className = 'collab-row collab-row-run';
+    const name = document.createElement('span');
+    name.className = 'collab-name';
+    name.textContent = r.objective;
+    name.title = `${r.id}\ncriteria: ${(r.acceptanceCriteria ?? []).join(' | ')}`;
+    row.append(name, badge(r.state));
+    const turns = document.createElement('span');
+    turns.className = 'collab-dim';
+    turns.textContent = `turns ${r.turnsUsed ?? 0}/${r.limits?.agentTurns ?? '?'}`;
+    row.append(turns);
+    const actions = document.createElement('span');
+    actions.className = 'collab-actions';
+    if (r.state === 'active') {
+      actions.append(miniBtn('pause', () => runAction(r, 'paused')), miniBtn('cancel', () => runAction(r, 'cancelled')));
+    } else if (r.state === 'paused') {
+      actions.append(miniBtn('resume', () => runAction(r, 'active')));
+    }
+    row.append(actions);
+    dom.collabRuns.append(row);
+  }
+
+  // --- pending question banner ----------------------------------------------
+  const asking = collab.runs.find((r) => r.pendingQuestion);
+  if (asking) {
+    dom.collabQuestion.hidden = false;
+    dom.collabQText.textContent = `${asking.pendingQuestion.agentId.slice(0, 12)} asks: ${asking.pendingQuestion.question}`;
+    dom.collabQSend.dataset.runId = asking.id;
+  } else {
+    dom.collabQuestion.hidden = true;
+  }
+
+  // --- tasks -----------------------------------------------------------------
+  dom.collabTasks.textContent = '';
+  const order = { awaiting_review: 0, running: 1, queued: 2, uncertain: 3, failed: 4, cancelled: 5, completed: 6 };
+  const sorted = [...collab.tasks].sort((x, y) => (order[x.state] ?? 9) - (order[y.state] ?? 9));
+  for (const t of sorted.slice(0, 60)) {
+    const row = document.createElement('div');
+    row.className = 'collab-row';
+    const name = document.createElement('span');
+    name.className = 'collab-name';
+    name.textContent = `${t.id} → ${t.assignee.slice(0, 10)}`;
+    name.title = `${t.instruction}\norigin: ${t.origin}${t.result ? `\nresult: ${t.result.outcome} — ${t.result.summary}` : ''}`;
+    row.append(name, badge(t.state));
+    const actions = document.createElement('span');
+    actions.className = 'collab-actions';
+    if (t.state === 'awaiting_review') {
+      actions.append(miniBtn('approve', () => reviewAction(t, true)), miniBtn('reject', () => reviewAction(t, false)));
+    }
+    if (t.state === 'queued' || t.state === 'running') {
+      actions.append(miniBtn('cancel', () => taskAction(t, 'cancel')));
+    }
+    if (['failed', 'cancelled', 'uncertain'].includes(t.state)) {
+      actions.append(miniBtn('retry', () => retryAction(t)));
+    }
+    row.append(actions);
+    dom.collabTasks.append(row);
+  }
+}
+
+function miniBtn(label, fn) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'tbtn tbtn-mini';
+  b.textContent = label;
+  b.addEventListener('click', (e) => { e.preventDefault(); fn().catch((err) => pushAgentEvent({ event: { type: 'error', message: err.message } })); });
+  return b;
+}
+
+async function runAction(run, state) {
+  if (state === 'cancelled' && !window.confirm(`Cancel run "${run.objective}"? Running agents are killed; queued tasks are cancelled.`)) return;
+  await api(`runs/${encodeURIComponent(run.id)}/state`, {
+    method: 'POST',
+    body: { state, reason: 'operator action from window', expectedRevision: run.revision },
+  });
+}
+
+async function reviewAction(task, approved) {
+  const evidence = window.prompt(approved
+    ? `Approve ${task.id}: what did YOU verify? (evidence is required)`
+    : `Reject ${task.id}: why?`);
+  if (!evidence || !evidence.trim()) return;
+  const fresh = await api(`tasks/${encodeURIComponent(task.id)}`);
+  await api(`tasks/${encodeURIComponent(task.id)}/review`, {
+    method: 'POST',
+    body: { approved, evidence: evidence.trim(), expectedRevision: fresh.task.revision },
+  });
+}
+
+async function taskAction(task, action) {
+  const fresh = await api(`tasks/${encodeURIComponent(task.id)}`);
+  await api(`tasks/${encodeURIComponent(task.id)}/${action}`, {
+    method: 'POST',
+    body: { expectedRevision: fresh.task.revision },
+  });
+}
+
+async function retryAction(task) {
+  const reason = window.prompt(`Retry ${task.id}.\nConfirm: the previous process is stopped AND you reviewed its side effects.\nReason:`);
+  if (!reason || !reason.trim()) return;
+  const fresh = await api(`tasks/${encodeURIComponent(task.id)}`);
+  await api(`tasks/${encodeURIComponent(task.id)}/retry`, {
+    method: 'POST',
+    body: {
+      reason: reason.trim(),
+      previousProcessStopped: true,
+      sideEffectsReviewed: true,
+      expectedRevision: fresh.task.revision,
+    },
+  });
+}
+
+// --- collab form wiring -----------------------------------------------------
+
+dom.collabAgentForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    provider: dom.caProvider.value,
+    permissionProfile: dom.caPermission.value,
+    cwd: dom.caCwd.value.trim() || undefined,
+    label: dom.caLabel.value.trim() || undefined,
+  };
+  try {
+    const result = await api('agents', { method: 'POST', body });
+    dom.caLabel.value = '';
+    pushAgentEvent({ agentId: result.agent.id, event: { type: 'diagnostic', text: `agent registered (${result.agent.capabilities?.available ? 'CLI available' : `CLI UNAVAILABLE: ${result.agent.capabilities?.reason}`})` } });
+  } catch (err) {
+    pushAgentEvent({ event: { type: 'error', message: err.message } });
+  }
+});
+
+dom.collabRunForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const objective = dom.crObjective.value.trim();
+  const agentIds = [...dom.crAgents.querySelectorAll('input:checked')].map((b) => b.value);
+  const criteria = dom.crCriteria.value.split(';').map((s) => s.trim()).filter(Boolean);
+  if (!objective) { dom.crHint.textContent = 'objective is required'; return; }
+  if (!agentIds.length) { dom.crHint.textContent = 'select at least one available agent'; return; }
+  if (!dom.crPlan.checked && !criteria.length) {
+    dom.crHint.textContent = 'provide acceptance criteria, or check "model plans tasks"';
+    return;
+  }
+  dom.crHint.textContent = '';
+  try {
+    const result = await api('runs', {
+      method: 'POST',
+      body: {
+        objective,
+        agentIds,
+        permissionProfile: dom.crPermission.value,
+        ...(criteria.length ? { acceptanceCriteria: criteria } : {}),
+        ...(dom.crPlan.checked ? { plan: true } : {}),
+      },
+    });
+    dom.crObjective.value = '';
+    dom.crCriteria.value = '';
+    dom.crHint.textContent = dom.crPlan.checked && result.run
+      ? `run ${result.run.id}: ${result.tasks.length} planned task(s)`
+      : `run ${result.run.id} created — add tasks with: hive runs / hive CLI (tasks-file)`;
+  } catch (err) {
+    dom.crHint.textContent = `error: ${err.message}`;
+  }
+});
+
+dom.collabQSend?.addEventListener('click', async () => {
+  const runId = dom.collabQSend.dataset.runId;
+  const text = dom.collabQInput.value.trim();
+  if (!runId || !text) return;
+  try {
+    const fresh = await api(`runs/${encodeURIComponent(runId)}`);
+    await api(`runs/${encodeURIComponent(runId)}/respond`, {
+      method: 'POST',
+      body: { text, expectedRevision: fresh.run.revision },
+    });
+    dom.collabQInput.value = '';
+  } catch (err) {
+    pushAgentEvent({ event: { type: 'error', message: err.message } });
+  }
+});
+dom.collabQInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); dom.collabQSend.click(); }
+});
 
 // ---------------------------------------------------------------- palette
 

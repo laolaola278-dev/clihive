@@ -25,7 +25,7 @@ import {
 const HELP = `hive -- talk to the other CLI panes in this window
 
 Usage:
-  hive send [--to <pane|all|orchestrator>] [--kind chat|task|result] <text...>
+  hive send [--to <pane|agent|all|orchestrator>] [--kind chat|task|result] <text...>
   hive ask <text...>                  Ask the orchestrator (right-hand window)
   hive inbox [--peek] [--json]        Read messages waiting for this pane
   hive read [--limit n] [--json]      Shared transcript for this window
@@ -34,13 +34,35 @@ Usage:
   hive status [--json]
   hive whoami
 
+Managed agents (Codex/Claude collaboration):
+  hive capabilities [--json]                     Probe codex/claude CLIs
+  hive agents [--json]                           List managed agents
+  hive agents add <codex|claude> [--cwd <dir>] [--permission read-only|workspace-write] [--label <name>]
+  hive run <objective...> --agents <id,id> [--plan] [--criteria "c1;c2"]
+       [--permission read-only|workspace-write] [--tasks-file <json>]
+  hive runs [--json]                             List collaboration runs
+  hive runs pause|resume|cancel <runId> [--reason <text>]
+  hive runs respond <runId> <text...>            Answer a blocked run's question
+  hive tasks [--run <runId>] [--json]            List tasks
+  hive tasks show <taskId> [--json]              Task detail + receipts
+  hive tasks review <taskId> --approve|--reject --evidence <text>
+  hive tasks cancel <taskId>
+  hive tasks retry <taskId> --reason <text> --stopped --reviewed
+
 Options:
-  --to <addr>     Target: a pane id, "all", "orchestrator", or "human"
+  --to <addr>     Target: a pane id, an agent id, "all", "orchestrator", or "human"
   --kind <kind>   chat (default), task, or result
   --from <id>     Override the sender (defaults to $CLIHIVE_PANE_ID)
   --url <url>     Hive URL (defaults to $CLIHIVE_URL, then ~/.clihive/token)
   --token <tok>   Auth token (defaults to $CLIHIVE_TOKEN, then the token file)
   --json          Machine-readable output
+
+Notes:
+  --plan asks the orchestrator model to decompose the objective into a task
+  graph; without it, provide tasks via --tasks-file (JSON array of
+  { id, assignee, instruction, dependencies }).
+  "done" from an agent lands in awaiting_review: a human (or the auto-review
+  path for message turns) must approve with evidence before dependents start.
 `;
 
 function parse(argv) {
@@ -57,6 +79,20 @@ function parse(argv) {
     else if (arg === '--limit' || arg === '-n') opts.limit = Number(argv[++i]);
     else if (arg === '--peek') opts.peek = true;
     else if (arg === '--json') opts.json = true;
+    else if (arg === '--cwd') opts.cwd = argv[++i];
+    else if (arg === '--permission') opts.permission = argv[++i];
+    else if (arg === '--label') opts.label = argv[++i];
+    else if (arg === '--agents') opts.agents = argv[++i];
+    else if (arg === '--plan') opts.plan = true;
+    else if (arg === '--criteria') opts.criteria = argv[++i];
+    else if (arg === '--tasks-file') opts.tasksFile = argv[++i];
+    else if (arg === '--run') opts.run = argv[++i];
+    else if (arg === '--approve') opts.approve = true;
+    else if (arg === '--reject') opts.reject = true;
+    else if (arg === '--evidence') opts.evidence = argv[++i];
+    else if (arg === '--reason') opts.reason = argv[++i];
+    else if (arg === '--stopped') opts.stopped = true;
+    else if (arg === '--reviewed') opts.reviewed = true;
     else if (arg === '--help' || arg === '-h') opts.help = true;
     else opts._.push(arg);
   }
@@ -212,13 +248,186 @@ const commands = {
 
   async status(opts) {
     const result = await api(opts, 'status');
+    const collab = result.collaboration;
     out(opts, result, [
       `url          ${result.url}`,
       `panes        ${result.panes.alive} alive / ${result.panes.count} total`,
       `orchestrator ${result.orchestrator.mode}${result.orchestrator.model ? ` (${result.orchestrator.model})` : ''}`,
+      ...(collab ? [
+        `agents       ${collab.agents.length} registered (${collab.agents.filter((a) => a.available).length} CLI available)`,
+        `runs         ${collab.runs.length} total (${collab.runs.filter((r) => r.state === 'active').length} active)`,
+        `tasks        ${collab.tasks.length} total (${collab.tasks.filter((t) => t.state === 'awaiting_review').length} awaiting review)`,
+      ] : []),
       `clients      ${result.clients}`,
       `trace        ${result.tracePath ?? 'memory only'} (${result.traceEvents} events)`,
     ]);
+  },
+
+  async capabilities(opts) {
+    const result = await api(opts, 'agents/capabilities');
+    out(opts, result, Object.entries(result.capabilities).map(([name, cap]) => (cap.available
+      ? `${name.padEnd(8)} available  ${cap.version ?? ''}  (${cap.executable ?? '?'})`
+      : `${name.padEnd(8)} NOT available: ${cap.reason ?? 'unknown'}`)));
+  },
+
+  async agents(opts) {
+    const sub = opts._[1];
+    if (sub === 'add') {
+      const provider = opts._[2];
+      if (!provider) throw new Error('usage: hive agents add <codex|claude> [--cwd dir] [--permission p] [--label name]');
+      const body = { provider, cwd: opts.cwd ?? process.cwd() };
+      if (opts.permission) body.permissionProfile = opts.permission;
+      if (opts.label) body.label = opts.label;
+      const result = await api(opts, 'agents', { method: 'POST', body });
+      const a = result.agent;
+      out(opts, result, [
+        `registered ${a.id} (${a.provider}) ${a.capabilities?.available ? `CLI ok: ${a.capabilities.version ?? ''}` : `CLI UNAVAILABLE: ${a.capabilities?.reason ?? '?'}`}`,
+        `  cwd=${a.cwd} permission=${a.permissionProfile}`,
+      ]);
+      return;
+    }
+    if (sub) throw new Error(`unknown agents subcommand: ${sub}`);
+    const result = await api(opts, 'agents');
+    out(opts, result, result.agents.length === 0
+      ? ['no managed agents (hive agents add codex|claude)']
+      : result.agents.map((a) => [
+        `${a.id.padEnd(24)} ${a.provider.padEnd(7)} ${a.state.padEnd(8)} ${a.permissionProfile.padEnd(15)} ${a.label ?? ''}`,
+        ...(a.capabilities?.available ? [] : [`    CLI unavailable: ${a.capabilities?.reason ?? '?'}`]),
+      ].join('\n')));
+  },
+
+  async run(opts) {
+    const objective = opts._.slice(1).join(' ').trim();
+    if (!objective) throw new Error('usage: hive run <objective...> --agents <id,id> [--plan | --tasks-file f.json] [--criteria "c1;c2"]');
+    const agentIds = (opts.agents ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!agentIds.length) throw new Error('--agents <id,id> is required (see: hive agents)');
+    const body = { objective, agentIds };
+    if (opts.permission) body.permissionProfile = opts.permission;
+    if (opts.criteria) body.acceptanceCriteria = opts.criteria.split(';').map((s) => s.trim()).filter(Boolean);
+    if (opts.plan) body.plan = true;
+    if (opts.tasksFile) body.tasks = JSON.parse(await readFile(opts.tasksFile, 'utf8'));
+    if (!body.plan && !Array.isArray(body.tasks)) {
+      throw new Error('provide --plan (model decomposes the objective) or --tasks-file <json>');
+    }
+    const result = await api(opts, 'runs', { method: 'POST', body });
+    out(opts, result, [
+      `run ${result.run.id} [${result.run.state}] ${objective}`,
+      `  agents: ${result.run.agentIds.join(', ')}`,
+      `  criteria: ${result.run.acceptanceCriteria.join(' | ')}`,
+      ...result.tasks.map((t) => `  task ${t.id.padEnd(20)} -> ${t.assignee} [${t.state}]${t.dependencies.length ? ` after ${t.dependencies.join(',')}` : ''}`),
+    ]);
+  },
+
+  async runs(opts) {
+    const sub = opts._[1];
+    if (['pause', 'resume', 'cancel'].includes(sub)) {
+      const runId = opts._[2];
+      if (!runId) throw new Error(`usage: hive runs ${sub} <runId> [--reason text]`);
+      const current = await api(opts, `runs/${encodeURIComponent(runId)}`);
+      const state = sub === 'pause' ? 'paused' : sub === 'resume' ? 'active' : 'cancelled';
+      const result = await api(opts, `runs/${encodeURIComponent(runId)}/state`, {
+        method: 'POST',
+        body: { state, reason: opts.reason ?? null, expectedRevision: current.run.revision },
+      });
+      out(opts, result, [`run ${runId} -> ${result.run.state}${result.run.reason ? ` (${result.run.reason})` : ''}`]);
+      return;
+    }
+    if (sub === 'respond') {
+      const runId = opts._[2];
+      const text = opts._.slice(3).join(' ').trim();
+      if (!runId || !text) throw new Error('usage: hive runs respond <runId> <text...>');
+      const current = await api(opts, `runs/${encodeURIComponent(runId)}`);
+      if (!current.run.pendingQuestion) throw new Error('run has no pending question');
+      process.stdout.write(`question from ${current.run.pendingQuestion.agentId}: ${current.run.pendingQuestion.question}\n`);
+      const result = await api(opts, `runs/${encodeURIComponent(runId)}/respond`, {
+        method: 'POST',
+        body: { text, expectedRevision: current.run.revision },
+      });
+      out(opts, result, [`answer delivered to ${current.run.pendingQuestion.agentId}`]);
+      return;
+    }
+    if (sub) throw new Error(`unknown runs subcommand: ${sub}`);
+    const result = await api(opts, 'runs');
+    out(opts, result, result.runs.length === 0
+      ? ['no runs']
+      : result.runs.map((r) => {
+        const counts = r.tasks.reduce((acc, t) => { acc[t.state] = (acc[t.state] ?? 0) + 1; return acc; }, {});
+        const summary = Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(' ');
+        return [
+          `${r.id} [${r.state}] turns ${r.turnsUsed}/${r.limits.agentTurns}  ${r.objective}`,
+          `  tasks: ${summary || '(none)'}`,
+          ...(r.pendingQuestion ? [`  QUESTION from ${r.pendingQuestion.agentId}: ${r.pendingQuestion.question}`] : []),
+          ...(r.reason ? [`  reason: ${r.reason}`] : []),
+        ].join('\n');
+      }));
+  },
+
+  async tasks(opts) {
+    const sub = opts._[1];
+    if (sub === 'show') {
+      const taskId = opts._[2];
+      if (!taskId) throw new Error('usage: hive tasks show <taskId>');
+      const result = await api(opts, `tasks/${encodeURIComponent(taskId)}`);
+      const t = result.task;
+      out(opts, result, [
+        `task ${t.id} [${t.state}] run=${t.runId} assignee=${t.assignee} origin=${t.origin}`,
+        `  instruction: ${t.instruction}`,
+        ...(t.result ? [`  result: ${t.result.outcome} — ${t.result.summary}`] : []),
+        ...(t.verification ? [`  verification: ${t.verification.status} by ${t.verification.source} — ${t.verification.evidence ?? ''}`] : []),
+        ...(t.error ? [`  error: ${t.error}`] : []),
+        ...result.receipts.map((r) => `  receipt ${r.attemptId}: ${r.outcome}${r.timedOut ? ' (timed out)' : ''}${r.permissionDenied ? ' (permission denied)' : ''}`),
+      ]);
+      return;
+    }
+    if (sub === 'review') {
+      const taskId = opts._[2];
+      if (!taskId || (!opts.approve && !opts.reject)) throw new Error('usage: hive tasks review <taskId> --approve|--reject --evidence <text>');
+      if (!opts.evidence) throw new Error('--evidence <text> is required: what did YOU verify?');
+      const current = await api(opts, `tasks/${encodeURIComponent(taskId)}`);
+      const result = await api(opts, `tasks/${encodeURIComponent(taskId)}/review`, {
+        method: 'POST',
+        body: { approved: Boolean(opts.approve), evidence: opts.evidence, expectedRevision: current.task.revision },
+      });
+      out(opts, result, [`task ${taskId} -> ${result.task.state}`]);
+      return;
+    }
+    if (sub === 'cancel') {
+      const taskId = opts._[2];
+      if (!taskId) throw new Error('usage: hive tasks cancel <taskId>');
+      const current = await api(opts, `tasks/${encodeURIComponent(taskId)}`);
+      const result = await api(opts, `tasks/${encodeURIComponent(taskId)}/cancel`, {
+        method: 'POST',
+        body: { expectedRevision: current.task.revision },
+      });
+      out(opts, result, [`task ${taskId}: ${result.task.state}${result.task.cancelRequested ? ' (cancel requested; confirms when the process stops)' : ''}`]);
+      return;
+    }
+    if (sub === 'retry') {
+      const taskId = opts._[2];
+      if (!taskId) throw new Error('usage: hive tasks retry <taskId> --reason <text> --stopped --reviewed');
+      if (!opts.reason) throw new Error('--reason <text> is required');
+      if (!opts.stopped || !opts.reviewed) {
+        throw new Error('retry requires explicit confirmation flags: --stopped (previous process is gone) --reviewed (side effects inspected)');
+      }
+      const current = await api(opts, `tasks/${encodeURIComponent(taskId)}`);
+      const result = await api(opts, `tasks/${encodeURIComponent(taskId)}/retry`, {
+        method: 'POST',
+        body: {
+          reason: opts.reason,
+          previousProcessStopped: true,
+          sideEffectsReviewed: true,
+          expectedRevision: current.task.revision,
+        },
+      });
+      out(opts, result, [`task ${taskId} -> ${result.task.state} (retry queued)`]);
+      return;
+    }
+    if (sub && sub !== 'list') throw new Error(`unknown tasks subcommand: ${sub}`);
+    const query = opts.run ? `tasks?run=${encodeURIComponent(opts.run)}` : 'tasks';
+    const result = await api(opts, query);
+    out(opts, result, result.tasks.length === 0
+      ? ['no tasks']
+      : result.tasks.map((t) => `${t.id.padEnd(22)} ${t.state.padEnd(15)} ${t.assignee.padEnd(24)} ${t.origin.padEnd(9)} ${t.instruction.slice(0, 60)}`));
   },
 
   async whoami(opts) {

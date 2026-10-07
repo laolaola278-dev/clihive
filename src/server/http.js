@@ -567,7 +567,8 @@ export class HiveServer {
 
       if (route === 'agents' && method === 'POST') {
         const body = await this.#readBody(req);
-        const agent = await this.#requireCollab().registerAgent(body);
+        // The window form may leave cwd empty: default to the hive's own cwd.
+        const agent = await this.#requireCollab().registerAgent({ ...body, cwd: body.cwd || this.cwd });
         this.#json(res, 201, { agent });
         return;
       }

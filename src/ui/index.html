@@ -74,6 +74,7 @@
       <nav class="deck-tabs" role="tablist">
         <button class="dtab is-active" data-tab="orch" role="tab" aria-selected="true" title="Orchestrator">&#9638;</button>
         <button class="dtab" data-tab="shared" role="tab" aria-selected="false" title="Shared transcript">&#9776;</button>
+        <button class="dtab" data-tab="collab" role="tab" aria-selected="false" title="Managed agents &amp; runs">&#9881;&#65038;</button>
         <button class="dtab" data-tab="trace" role="tab" aria-selected="false" title="Trace">&#9881;</button>
         <span class="deck-tabs-spacer"></span>
         <button class="icon-btn" id="close-orch" type="button" aria-label="Hide panel">&times;</button>
@@ -91,6 +92,60 @@
         </div>
         <div class="dpanel" data-panel="shared" role="tabpanel">
           <div class="log" id="shared-log"></div>
+        </div>
+        <div class="dpanel" data-panel="collab" role="tabpanel">
+          <div class="collab" id="collab-panel">
+            <div class="collab-question" id="collab-question" hidden>
+              <p class="collab-q-text" id="collab-q-text"></p>
+              <div class="collab-q-row">
+                <input class="input" id="collab-q-input" type="text" placeholder="Answer the agent&hellip;" />
+                <button class="tbtn" id="collab-q-send" type="button">Respond</button>
+              </div>
+            </div>
+            <details class="collab-sec" id="collab-agents-sec" open>
+              <summary><span class="section-label" id="collab-agents-label">Agents &middot; 0</span></summary>
+              <div class="collab-list" id="collab-agents"></div>
+              <form class="collab-form" id="collab-agent-form">
+                <select class="mini-select" id="ca-provider" aria-label="Provider">
+                  <option value="codex">codex</option>
+                  <option value="claude">claude</option>
+                </select>
+                <select class="mini-select" id="ca-permission" aria-label="Permission profile">
+                  <option value="read-only">read-only</option>
+                  <option value="workspace-write">workspace-write</option>
+                </select>
+                <input class="input" id="ca-label" type="text" placeholder="label (optional)" />
+                <input class="input" id="ca-cwd" type="text" placeholder="cwd (default: hive cwd)" />
+                <button class="tbtn" type="submit">+ agent</button>
+              </form>
+            </details>
+            <details class="collab-sec" id="collab-runs-sec" open>
+              <summary><span class="section-label" id="collab-runs-label">Runs &middot; 0</span></summary>
+              <div class="collab-list" id="collab-runs"></div>
+              <form class="collab-form collab-form-run" id="collab-run-form">
+                <input class="input" id="cr-objective" type="text" placeholder="Objective for a new run&hellip;" />
+                <div class="collab-list" id="cr-agents"></div>
+                <input class="input" id="cr-criteria" type="text" placeholder="acceptance criteria (; separated)" />
+                <div class="collab-form-row">
+                  <select class="mini-select" id="cr-permission" aria-label="Run permission">
+                    <option value="read-only">read-only</option>
+                    <option value="workspace-write">workspace-write</option>
+                  </select>
+                  <label class="collab-check"><input id="cr-plan" type="checkbox" /> model plans tasks</label>
+                  <button class="tbtn tbtn-accent" type="submit">Start run</button>
+                </div>
+                <p class="collab-hint" id="cr-hint"></p>
+              </form>
+            </details>
+            <details class="collab-sec" id="collab-tasks-sec" open>
+              <summary><span class="section-label" id="collab-tasks-label">Tasks &middot; 0</span></summary>
+              <div class="collab-list" id="collab-tasks"></div>
+            </details>
+            <details class="collab-sec" id="collab-events-sec">
+              <summary><span class="section-label">Agent events</span></summary>
+              <div class="log log-trace collab-events" id="collab-events"></div>
+            </details>
+          </div>
         </div>
         <div class="dpanel" data-panel="trace" role="tabpanel">
           <div class="trace-filter"><input class="input" id="trace-filter" type="search" placeholder="filter: msg. / pane. / orch." /></div>
