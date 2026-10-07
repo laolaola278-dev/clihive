@@ -251,7 +251,142 @@ export const claudeAdapter = {
   },
 };
 
-export const ADAPTERS = Object.freeze({ codex: codexAdapter, claude: claudeAdapter });
+// --- opencode ---------------------------------------------------------------
+//
+// Verified against opencode 1.18.34 (`opencode run --format json`). It has no
+// structured-output flag, so the result contract rides in the prompt and the
+// last text part must be one JSON object; the server re-validates it anyway.
+// Permissions are enforced by the CLI itself through OPENCODE_CONFIG_CONTENT:
+//   read-only       -> `plan` agent + edit/bash/webfetch denied
+//   workspace-write -> `build` agent + edit/bash allowed, webfetch denied
+// and external_directory is always denied, so file tools cannot leave the
+// working directory (observed: an out-of-directory write fails). Bash is NOT
+// path-confined by opencode in workspace-write — same trust as claude's Bash.
+// There is no auto-approve flag (`--auto` is never passed).
+
+const OPENCODE_DENIED_RE = /rule which prevents|permission|not allowed|denied|requires approval/i;
+
+export function stripJsonFence(text) {
+  const trimmed = String(text ?? '').trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+/**
+ * opencode has no structured-output switch, so models wrap the JSON object
+ * inconsistently (bare, fenced, prose before/after, stray "json" label).
+ * Try progressively looser extractions; the first that parses to an OBJECT
+ * wins. The server re-validates the shape afterwards, so being tolerant about
+ * packaging does not loosen the contract.
+ */
+export function extractJsonObject(text) {
+  const raw = String(text ?? '').trim();
+  const candidates = [raw, stripJsonFence(raw)];
+  for (const m of raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) candidates.push(m[1].trim());
+  const first = raw.indexOf('{');
+  const last = raw.lastIndexOf('}');
+  if (first !== -1 && last > first) candidates.push(raw.slice(first, last + 1));
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate);
+      if (value && typeof value === 'object' && !Array.isArray(value)) return { value, error: null };
+      lastError = new Error('JSON value is not an object');
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  return { value: null, error: lastError ?? new Error('empty message') };
+}
+
+export const opencodeAdapter = {
+  provider: 'opencode',
+  supportsSchemaFile: false, // contract travels in the prompt; no schema flag exists
+
+  buildArgs({ cwd, permissionProfile, sessionId, model }) {
+    const args = [
+      'run', '--pure', '--format', 'json',
+      '--agent', permissionProfile === 'workspace-write' ? 'build' : 'plan',
+      '--dir', cwd,
+    ];
+    if (model) args.push('-m', model);
+    if (sessionId) args.push('-s', sessionId);
+    return args; // prompt is read from stdin
+  },
+
+  buildEnv({ permissionProfile }) {
+    const write = permissionProfile === 'workspace-write' ? 'allow' : 'deny';
+    return {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        permission: { edit: write, bash: write, webfetch: 'deny', external_directory: 'deny' },
+      }),
+    };
+  },
+
+  normalizeEvent(raw) {
+    if (!raw || typeof raw !== 'object') return [];
+    const out = [];
+    if (typeof raw.sessionID === 'string' && raw.sessionID) {
+      out.push({ type: 'session', sessionId: raw.sessionID });
+    }
+    const part = raw.part ?? {};
+    switch (raw.type) {
+      case 'step_start':
+      case 'step_finish':
+        break;
+      case 'text':
+        if (typeof part.text === 'string' && part.text.trim()) {
+          // Every text part is a candidate final answer; the adapter keeps the last.
+          out.push({ type: 'text', text: boundedText(part.text) });
+          out.push({ type: 'result', resultText: part.text, isError: false, subtype: 'text' });
+        }
+        break;
+      case 'tool_use': {
+        const state = part.state ?? {};
+        out.push({
+          type: 'tool', name: part.tool ?? 'tool',
+          detail: boundedText(JSON.stringify(state.input ?? {}), 2000),
+          phase: state.status === 'completed' || state.status === 'error' ? 'completed' : 'started',
+          status: state.status === 'error' ? 'error' : state.status === 'completed' ? 'ok' : null,
+          toolUseId: part.callID ?? null,
+        });
+        if (state.status === 'error' && OPENCODE_DENIED_RE.test(String(state.error ?? ''))) {
+          out.push({ type: 'permission_denied', detail: boundedText(String(state.error), 2000) });
+        }
+        break;
+      }
+      case 'error': {
+        const data = raw.error?.data ?? {};
+        out.push({
+          type: 'error', code: raw.error?.name ?? null,
+          message: boundedText(data.message ?? JSON.stringify(raw.error ?? {}), 2000),
+        });
+        break;
+      }
+      default:
+        out.push(diagnostic(raw));
+    }
+    return out;
+  },
+
+  async finalize({ exitCode, timedOut, spawnError, stderrTail, lastResultEvent, errorMessage }) {
+    if (spawnError) return { error: `opencode failed to start: ${spawnError}` };
+    if (timedOut) return { error: 'opencode turn timed out and the process tree was killed' };
+    if (errorMessage) return { error: `opencode reported an error: ${errorMessage}` };
+    if (exitCode !== 0) return { error: `opencode exited with code ${exitCode}${stderrTail ? `: ${stderrTail.slice(-2000)}` : ''}` };
+    if (!lastResultEvent) return { error: 'opencode stream ended without a final text message' };
+    const parsed = extractJsonObject(lastResultEvent.resultText);
+    if (parsed.error) {
+      const head = String(lastResultEvent.resultText ?? '').slice(0, 160).replace(/\s+/g, ' ');
+      return { error: `opencode final message is not a valid JSON object: ${parsed.error.message} (starts: ${JSON.stringify(head)})` };
+    }
+    return { rawResult: parsed.value, error: null };
+  },
+};
+
+export const ADAPTERS = Object.freeze({
+  codex: codexAdapter, claude: claudeAdapter, opencode: opencodeAdapter,
+});
 
 /** Local, side-effect-free capability probe: `<cli> --version`. */
 export async function detectCli(executable, { timeoutMs = 15000, spawnImpl = spawn } = {}) {
@@ -288,7 +423,7 @@ export async function detectCli(executable, { timeoutMs = 15000, spawnImpl = spa
  */
 export async function runTurn(adapter, options) {
   const {
-    executable, prompt, cwd, permissionProfile = 'read-only', sessionId = null,
+    executable, prompt, cwd, permissionProfile = 'read-only', sessionId = null, model = null,
     schema, timeoutMs, env = process.env, spawnImpl = spawn, onEvent = () => {},
     onSpawn = null, platform = process.platform,
   } = options;
@@ -299,18 +434,21 @@ export async function runTurn(adapter, options) {
   const schemaJson = JSON.stringify(schema);
   if (adapter.supportsSchemaFile) await writeFile(schemaPath, schemaJson, 'utf8');
 
-  const args = adapter.buildArgs({ cwd, permissionProfile, sessionId, schemaPath, lastMessagePath, schemaJson });
+  const args = adapter.buildArgs({ cwd, permissionProfile, sessionId, schemaPath, lastMessagePath, schemaJson, model });
+  // Adapters may enforce permissions through the environment (opencode).
+  const childEnv = adapter.buildEnv ? { ...env, ...adapter.buildEnv({ permissionProfile }) } : env;
   const parser = new JsonlParser();
   let stderrTail = '';
   let timedOut = false;
   let spawnError = null;
+  let errorMessage = null;
   let currentSessionId = sessionId;
   let lastResultEvent = null;
 
   try {
     return await new Promise((resolve) => {
       const child = spawnImpl(executable.command, [...executable.prependArgs, ...args], {
-        cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        cwd, env: childEnv, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
       });
       if (onSpawn) onSpawn(child);
       const timer = timeoutMs > 0 ? setTimeout(() => {
@@ -319,14 +457,16 @@ export async function runTurn(adapter, options) {
       }, timeoutMs) : null;
 
       child.stdin?.on('error', () => {}); // EPIPE if the CLI exits early
-      child.stdout?.on('data', (chunk) => {
-        for (const raw of parser.push(chunk)) {
-          for (const event of adapter.normalizeEvent(raw)) {
-            if (event.type === 'session' && event.sessionId) currentSessionId = event.sessionId;
-            if (event.type === 'result') lastResultEvent = event;
-            onEvent({ ...event, at: Date.now() });
-          }
+      const handleRaw = (raw) => {
+        for (const event of adapter.normalizeEvent(raw)) {
+          if (event.type === 'session' && event.sessionId) currentSessionId = event.sessionId;
+          if (event.type === 'result') lastResultEvent = event;
+          if (event.type === 'error' && !errorMessage) errorMessage = event.message ?? 'error event';
+          onEvent({ ...event, at: Date.now() });
         }
+      };
+      child.stdout?.on('data', (chunk) => {
+        for (const raw of parser.push(chunk)) handleRaw(raw);
       });
       child.stderr?.on('data', (chunk) => {
         stderrTail = (stderrTail + chunk.toString('utf8')).slice(-STDERR_TAIL_BYTES);
@@ -334,15 +474,9 @@ export async function runTurn(adapter, options) {
       child.on('error', (err) => { spawnError = err.message; });
       child.on('close', async (exitCode) => {
         if (timer) clearTimeout(timer);
-        for (const raw of parser.end()) {
-          for (const event of adapter.normalizeEvent(raw)) {
-            if (event.type === 'session' && event.sessionId) currentSessionId = event.sessionId;
-            if (event.type === 'result') lastResultEvent = event;
-            onEvent({ ...event, at: Date.now() });
-          }
-        }
+        for (const raw of parser.end()) handleRaw(raw);
         const final = await adapter.finalize({
-          exitCode, timedOut, spawnError, stderrTail,
+          exitCode, timedOut, spawnError, stderrTail, errorMessage,
           ...(adapter.supportsSchemaFile ? { lastMessagePath } : { lastResultEvent }),
         });
         onEvent({ type: 'exit', exitCode, timedOut, at: Date.now() });

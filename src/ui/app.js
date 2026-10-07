@@ -60,6 +60,7 @@ const dom = {
   caPermission: $('ca-permission'),
   caLabel: $('ca-label'),
   caCwd: $('ca-cwd'),
+  caModel: $('ca-model'),
   collabRuns: $('collab-runs'),
   collabRunsLabel: $('collab-runs-label'),
   collabRunForm: $('collab-run-form'),
@@ -1024,6 +1025,7 @@ dom.collabAgentForm?.addEventListener('submit', async (e) => {
     permissionProfile: dom.caPermission.value,
     cwd: dom.caCwd.value.trim() || undefined,
     label: dom.caLabel.value.trim() || undefined,
+    model: (dom.caProvider.value === 'opencode' && dom.caModel.value.trim()) || undefined,
   };
   try {
     const result = await api('agents', { method: 'POST', body });

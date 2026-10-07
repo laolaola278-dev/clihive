@@ -62,6 +62,11 @@ export const CLI_PROFILES = Object.freeze([
     note: 'opencode — full-screen agent; stdin is its prompt',
   },
   {
+    id: 'cline', label: 'cline', names: ['cline'],
+    accent: '#f25c8a', tui: true, suggestMode: 'stdin',
+    note: 'Cline CLI — full-screen agent; stdin is its prompt',
+  },
+  {
     id: 'amp', label: 'amp', names: ['amp'],
     accent: '#4cc9ff', tui: true, suggestMode: 'stdin',
     note: 'Amp — full-screen agent; stdin is its prompt',

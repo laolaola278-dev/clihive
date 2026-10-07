@@ -37,7 +37,7 @@ Usage:
 Managed agents (Codex/Claude collaboration):
   hive capabilities [--json]                     Probe codex/claude CLIs
   hive agents [--json]                           List managed agents
-  hive agents add <codex|claude> [--cwd <dir>] [--permission read-only|workspace-write] [--label <name>]
+  hive agents add <codex|claude|opencode> [--cwd <dir>] [--permission read-only|workspace-write] [--label <name>] [--model <provider/model>]
   hive run <objective...> --agents <id,id> [--plan] [--criteria "c1;c2"]
        [--permission read-only|workspace-write] [--tasks-file <json>]
   hive runs [--json]                             List collaboration runs
@@ -82,6 +82,7 @@ function parse(argv) {
     else if (arg === '--cwd') opts.cwd = argv[++i];
     else if (arg === '--permission') opts.permission = argv[++i];
     else if (arg === '--label') opts.label = argv[++i];
+    else if (arg === '--model') opts.model = argv[++i];
     else if (arg === '--agents') opts.agents = argv[++i];
     else if (arg === '--plan') opts.plan = true;
     else if (arg === '--criteria') opts.criteria = argv[++i];
@@ -274,10 +275,11 @@ const commands = {
     const sub = opts._[1];
     if (sub === 'add') {
       const provider = opts._[2];
-      if (!provider) throw new Error('usage: hive agents add <codex|claude> [--cwd dir] [--permission p] [--label name]');
+      if (!provider) throw new Error('usage: hive agents add <codex|claude|opencode> [--cwd dir] [--permission p] [--label name] [--model provider/model (opencode)]');
       const body = { provider, cwd: opts.cwd ?? process.cwd() };
       if (opts.permission) body.permissionProfile = opts.permission;
       if (opts.label) body.label = opts.label;
+      if (opts.model) body.model = opts.model;
       const result = await api(opts, 'agents', { method: 'POST', body });
       const a = result.agent;
       out(opts, result, [
@@ -289,9 +291,9 @@ const commands = {
     if (sub) throw new Error(`unknown agents subcommand: ${sub}`);
     const result = await api(opts, 'agents');
     out(opts, result, result.agents.length === 0
-      ? ['no managed agents (hive agents add codex|claude)']
+      ? ['no managed agents (hive agents add codex|claude|opencode)']
       : result.agents.map((a) => [
-        `${a.id.padEnd(24)} ${a.provider.padEnd(7)} ${a.state.padEnd(8)} ${a.permissionProfile.padEnd(15)} ${a.label ?? ''}`,
+        `${a.id.padEnd(24)} ${a.provider.padEnd(9)} ${a.state.padEnd(8)} ${a.permissionProfile.padEnd(15)} ${a.label ?? ''}`,
         ...(a.capabilities?.available ? [] : [`    CLI unavailable: ${a.capabilities?.reason ?? '?'}`]),
       ].join('\n')));
   },

@@ -20,6 +20,19 @@ test('detects an agent through wrapper invocations', () => {
   assert.equal(detectCliProfile('pnpm', ['dlx', 'gemini']).id, 'gemini');
 });
 
+test('recognizes opencode and cline panes (Windows shim paths and npx wrappers)', () => {
+  for (const [id, cmd] of [['opencode', 'opencode'], ['cline', 'cline']]) {
+    const p = detectCliProfile(cmd);
+    assert.equal(p.id, id);
+    assert.equal(p.suggestMode, 'stdin');
+    assert.notEqual(p.accent, GENERIC_PROFILE.accent);
+    assert.equal(detectCliProfile(`C:\\Users\\admin\\AppData\\Roaming\\npm\\${cmd}.cmd`).id, id);
+    assert.equal(detectCliProfile('npx', ['-y', cmd]).id, id);
+  }
+  // zcode has no verified interface: it must stay an unknown/display CLI.
+  assert.equal(detectCliProfile('zcode').id, GENERIC_PROFILE.id);
+});
+
 test('detects Windows shells by full path', () => {
   assert.equal(detectCliProfile('C:\\Windows\\System32\\cmd.exe').id, 'shell');
   assert.equal(detectCliProfile('C:\\Program Files\\PowerShell\\7\\pwsh.exe').id, 'shell');

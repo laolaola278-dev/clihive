@@ -6,7 +6,7 @@ coordinates their work. Every message lands on a shared transcript that any
 pane can read, and every delivery is traced, so you can always answer:
 *did that pane actually receive it?*
 
-On top of the terminals, clihive runs **managed agents**: codex and claude
+On top of the terminals, clihive runs **managed agents**: codex, claude and opencode
 driven through their structured CLI interfaces (not keyboard simulation),
 working on persisted tasks with permission boundaries, a durable message
 queue, and an operator review gate. Two modes, one window: your native
@@ -34,7 +34,7 @@ terminal panes stay manual; managed agent panes are orchestrated.
 - **Grid of CLI panes.** Each pane is a real PTY (your shell, or an agent CLI
   like `claude` / `codex`). Panes tile; the focused pane is ringed in amber.
 - **Per-CLI adaptation.** The hive recognizes what each pane runs — codex,
-  claude, gemini, qwen, aider, opencode, amp, goose, dsh, shells, node,
+  claude, gemini, qwen, aider, opencode, cline, amp, goose, dsh, shells, node,
   python — from its command line (`src/server/cli-profiles.js`). The pane wears
   that CLI's badge and accent color, and its safe delivery default is chosen
   for it: programs that read stdin as their prompt can opt into `stdin`
@@ -179,9 +179,9 @@ run real work with guarantees a terminal cannot offer. An agent is a headless
 codex/claude process the hive drives through its structured CLI — never
 keystrokes into a TUI.
 
-- **Adapters, verified against real CLIs.** Only codex and claude are
-  *adapted* (other CLIs are merely *recognized* for styling and cannot be
-  managed):
+- **Adapters, verified against real CLIs.** Only codex, claude and opencode are
+  *adapted*; every other CLI is merely *recognized* for styling (pane badge /
+  colour / default delivery mode) and cannot be managed:
   - `codex-cli 0.160.0` — `codex exec --json --skip-git-repo-check -C <cwd>
     --sandbox <profile> --output-schema <file>`, prompt on stdin, session
     resume via `codex exec resume <SESSION_ID> -`.
@@ -189,10 +189,28 @@ keystrokes into a TUI.
     stream-json --json-schema <inline>`, `--permission-mode plan` for
     read-only / `acceptEdits` + explicit `--allowedTools` for workspace-write,
     `--add-dir <cwd>`, `--resume <id>`.
+  - `opencode 1.18.34` — `opencode run --pure --format json --agent plan|build
+    --dir <cwd> [-m provider/model] [-s <session>]`, prompt on stdin.
+    opencode has **no structured-output flag**, so the result contract rides in
+    the prompt and the adapter extracts the JSON object from the final message
+    (bare, fenced, or surrounded by prose); the server re-validates the shape.
+    Permissions are enforced by opencode itself via `OPENCODE_CONFIG_CONTENT`
+    (read-only: edit/bash/webfetch denied; workspace-write: edit/bash allowed;
+    `external_directory` always denied; `--auto` is never passed). Register with
+    `hive agents add opencode --model provider/model`: opencode's built-in
+    default model is rejected on some machines, so pick one that works for you.
+    Caveat: in workspace-write opencode's bash tool is not path-confined (same
+    trust level as claude's Bash).
   - Hard rules: prompt via stdin only, no shell interpretation, no
     danger/bypass/approve-for-me flags, unknown permission profiles degrade to
-    read-only. Both adapters passed a real end-to-end acceptance run
-    (2026-10-07, evidence in `docs/acceptance-real-2026-10-07.md`).
+    read-only. codex and claude passed a real end-to-end acceptance run
+    (2026-10-07, `docs/acceptance-real-2026-10-07.md`); opencode passed its own
+    (`docs/acceptance-opencode-2026-10-07.md`) with the limits stated there.
+  - **Not adapted:** cline (3.0.62 installed here, but its headless run needs
+    re-authentication on this machine, so nothing could be verified; its
+    `--json` / `-p` / `--id` / `--auto-approve` flags exist but are unproven
+    here) and zcode (not installed, interface unknown). Both are recognized
+    only as panes (cline) or unknown CLIs (zcode).
 - **Permission boundary.** Effective permission = intersection of the agent's
   profile and the run's profile, default read-only. Model-generated tasks can
   never elevate it. Denials surface as `permission_denied` events and the
@@ -248,6 +266,7 @@ Collaboration commands (managed agents — work from anywhere with the token):
 hive capabilities                        # which managed CLIs this machine really has
 hive agents                              # list managed agents + state
 hive agents add codex --label review --cwd C:\repo --permission read-only
+hive agents add opencode --model openrouter/deepseek/deepseek-chat --cwd C:\repo
 hive run "audit the auth module" --agents agt_x,agt_y --plan --criteria "no secrets logged"
 hive run "fix issue 42" --agents agt_x --tasks-file tasks.json
 hive runs                                # list; also: pause|resume|cancel <runId>|respond <runId> <text>
@@ -321,6 +340,7 @@ node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack, std
 node scripts/verify-ui.mjs  # drives the real window in Chromium (incl. the collab panel)
 npm run check               # parse every source file
 node scripts/acceptance-real.mjs   # REAL codex + claude run; writes .artifacts evidence (needs both CLIs logged in)
+node scripts/acceptance-opencode.mjs <provider/model>   # REAL opencode run (needs a working opencode model)
 ```
 
 Simulated tests and real acceptance are reported separately on purpose. The
@@ -341,7 +361,7 @@ src/
     orchestrator.js    the right-hand window: manual relay or model
     collaboration-*.js durable store, validation, task state machine, result
                        parsing, service (queue, scheduling, review, budgets)
-    agent-runtime/     codex/claude adapters, JSONL parsing, CLI resolution,
+    agent-runtime/     codex/claude/opencode adapters, JSONL parsing, CLI resolution,
                        turn prompt + result schema
     http.js            HTTP/JSON API + WebSocket + static serving
     index.js           entry point

@@ -491,7 +491,7 @@ export class CollaborationService extends EventEmitter {
       let permissionDenied = false;
       outcome = await this.runTurnImpl(this.adapters[agent.provider], {
         executable, prompt, cwd: agent.cwd, permissionProfile: permission,
-        sessionId: agent.sessionId ?? null, schema,
+        sessionId: agent.sessionId ?? null, model: agent.model ?? null, schema,
         timeoutMs: run.limits.taskTimeoutMs,
         env: agentEnv(this.baseEnv, agent),
         platform: this.platform, attemptId,

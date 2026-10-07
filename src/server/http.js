@@ -36,6 +36,7 @@ import { CollaborationStore } from './collaboration-store.js';
 import { CollaborationService } from './collaboration-service.js';
 import { CollaborationError } from './collaboration-validation.js';
 import { detectCli } from './agent-runtime/adapters.js';
+import { MANAGED_PROVIDERS } from './collaboration-validation.js';
 import { resolveCliExecutable } from './agent-runtime/resolve-cli.js';
 
 const MIME = {
@@ -548,7 +549,7 @@ export class HiveServer {
       // --- managed collaboration endpoints (operator token) ----------------
       if (route === 'agents/capabilities' && method === 'GET') {
         const capabilities = {};
-        for (const provider of ['codex', 'claude']) {
+        for (const provider of MANAGED_PROVIDERS) {
           try {
             const executable = await resolveCliExecutable(provider);
             capabilities[provider] = { executable: executable.command, ...(await detectCli(executable, { timeoutMs: 30000 })) };

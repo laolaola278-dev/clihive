@@ -79,19 +79,33 @@ export function directoryLockKey(realDirectory, platform = process.platform) {
   return platform === 'win32' ? trimmed.toLowerCase() : trimmed;
 }
 
+export const MANAGED_PROVIDERS = Object.freeze(['codex', 'claude', 'opencode']);
+
 export function validateAgentInput(input) {
-  objectFields(input, ['provider', 'label', 'cwd', 'permissionProfile'], 'agent');
-  if (!['codex', 'claude'].includes(input.provider)) {
-    throw new CollaborationError('Managed agents support only codex and claude');
+  objectFields(input, ['provider', 'label', 'cwd', 'permissionProfile', 'model'], 'agent');
+  if (!MANAGED_PROVIDERS.includes(input.provider)) {
+    throw new CollaborationError(`Managed agents support only ${MANAGED_PROVIDERS.join(', ')}`);
   }
   const cwd = requiredText(input.cwd, 'cwd', 32768);
   directoryLockKey(cwd);
-  return {
+  const value = {
     provider: input.provider,
     label: input.label === undefined ? input.provider : requiredText(input.label, 'label', 120),
     cwd,
     permissionProfile: permissionProfile(input.permissionProfile),
   };
+  if (input.model !== undefined && input.model !== null && input.model !== '') {
+    if (input.provider !== 'opencode') {
+      throw new CollaborationError('model is only supported for opencode agents (codex/claude use their own configured model)');
+    }
+    const model = requiredText(input.model, 'model', 200);
+    // provider/model, no option-like or whitespace/shell-ish content: it becomes one argv element.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._~:/-]*$/.test(model)) {
+      throw new CollaborationError('model must look like provider/model');
+    }
+    value.model = model;
+  }
+  return value;
 }
 
 export const DEFAULT_RUN_LIMITS = Object.freeze({
