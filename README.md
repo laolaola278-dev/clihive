@@ -1,5 +1,7 @@
 # clihive
 
+**[中文文档](README.zh-CN.md)** | **[测试指南 / Testing Guide](TESTING.md)**
+
 A workspace multiplexer for CLI agents. One window holds many small CLI panes.
 A hideable orchestrator window on the right talks to all of them at once and
 coordinates their work. Every message lands on a shared transcript that any
@@ -28,6 +30,14 @@ terminal panes stay manual; managed agent panes are orchestrated.
 │  activity trace drawer (Ctrl+Shift+T)                                │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+## 界面预览 / Interface Preview
+
+| 主界面 / Main Interface | Matrix 主题 / Matrix Theme | 协作面板 / Collab Panel |
+|:---:|:---:|:---:|
+| ![主界面](screenshots/01-main-interface.png) | ![Matrix](screenshots/03-theme-matrix.png) | ![协作](screenshots/06-collab-panel.png) |
+
+*更多截图见 `screenshots/` 目录 / More screenshots in the `screenshots/` directory*
 
 ## What it does
 
@@ -332,20 +342,30 @@ The window itself connects over WebSocket at `/ws` and receives `hello`,
 `pane.input`, `pane.resize`, `pane.kill`, `pane.subscribe`, `message.send` and
 `orch.ask`.
 
-## Testing
+## Testing / 测试
+
+详细的测试指南见 **[TESTING.md](TESTING.md)** / See **[TESTING.md](TESTING.md)** for the detailed testing guide.
 
 ```bash
 npm test                    # unit/API tests incl. collaboration (fake CLIs — simulated, NOT proof of real collaboration)
+                            # 单元/API 测试包括协作（假 CLI——模拟的，非真实协作的证明）
 node scripts/smoke.mjs      # end-to-end with real PTYs: send, deliver, ack, stdin reader
+                            # 用真实 PTY 端到端：发送、传递、确认、stdin 读取器
 node scripts/verify-ui.mjs  # drives the real window in Chromium (incl. the collab panel)
-npm run check               # parse every source file
+                            # 在 Chromium 中驱动真实窗口（包括协作面板）
+npm run check               # parse every source file / 解析每个源文件
 node scripts/acceptance-real.mjs   # REAL codex + claude run; writes .artifacts evidence (needs both CLIs logged in)
+                                   # 真实 codex + claude 运行；写入 .artifacts 证据（需要两个 CLI 登录）
 node scripts/acceptance-opencode.mjs <provider/model>   # REAL opencode run (needs a working opencode model)
+                                                        # 真实 opencode 运行（需要工作的 opencode 模型）
 ```
 
 Simulated tests and real acceptance are reported separately on purpose. The
 latest real-CLI record, including a failed first attempt, is
 [docs/acceptance-real-2026-10-07.md](docs/acceptance-real-2026-10-07.md).
+
+模拟测试和真实验收故意分开报告。最新的真实 CLI 记录，包括失败的第一次尝试，
+在 [docs/acceptance-real-2026-10-07.md](docs/acceptance-real-2026-10-07.md)。
 
 ## Layout
 
