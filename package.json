@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "src/desktop/main.cjs",
   "description": "A hive of CLI agents in one window: many small CLI panes, one hideable orchestrator, one shared transcript, and a full delivery trace.",
   "license": "MIT",
   "bin": {
@@ -12,7 +13,11 @@
     "start": "node src/server/index.js",
     "desktop": "electron src/desktop/main.cjs",
     "test": "node --test \"test/*.test.js\"",
-    "check": "node scripts/syntax-check.mjs"
+    "check": "node scripts/syntax-check.mjs",
+    "build": "electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
@@ -23,8 +28,47 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "build": {
+    "appId": "com.clihive.app",
+    "productName": "clihive",
+    "npmRebuild": false,
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "bin/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "clihive"
+    }
+  },
   "devDependencies": {
     "electron": "^32.3.3",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.64.0"
   }
 }

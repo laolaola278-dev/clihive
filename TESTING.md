@@ -10,7 +10,8 @@ This document details the clihive testing system, including unit tests, integrat
 |---------|------|---------|---------|
 | 单元测试 | `npm test` | 174 个测试，覆盖核心逻辑 | 单元正确性 |
 | 烟雾测试 | `node scripts/smoke.mjs` | 真实 PTY 端到端流程 | 集成正确性 |
-| UI 验证 | `node scripts/verify-ui.mjs` | Chromium 驱动的真实 UI | 用户体验 |
+| UI 验证 | `node scripts/verify-ui.mjs` | Chromium 驱动的真实 UI，45 项断言 | 用户体验 |
+| 截图采集 | `npm run screenshots` | 真实 UI 9 张截图（README 画廊） | 视觉证据 |
 | 语法检查 | `npm run check` | 所有源文件解析 | 代码完整性 |
 | 真实 CLI 验收 | `node scripts/acceptance-*.mjs` | 真实 codex/claude/opencode 进程 | 生产就绪 |
 
@@ -171,9 +172,29 @@ node scripts/verify-ui.mjs
 - ✅ **命令面板**: Ctrl/Cmd+K 模糊搜索
 - ✅ **追踪抽屉**: Ctrl/Cmd+Shift+T 事件流
 
-**证明 / Proof**: 脚本退出码 0，输出包含 `ui: OK`，截图保存在 `.artifacts/ui-*.png`。
+**证明 / Proof**: 脚本退出码 0，输出包含 `ui: OK`。
 
-**Evidence**: Exit code 0, output contains `ui: OK`, screenshots saved to `.artifacts/ui-*.png`.
+**Evidence**: Exit code 0, output contains `ui: OK`.
+
+### 截图采集 / Screenshot Capture
+
+运行命令 / Run command:
+```bash
+npm run screenshots
+```
+
+**测试内容 / Test Content**:
+- ✅ **进程内真实服务器**: 自启动 `HiveServer`（假托管 CLI），用完即关
+- ✅ **真实 PTY 窗格**: 键盘输入 `hive send`，消息必须进入共享记录
+- ✅ **真实投递链**: 调度器消息必须出现两个窗格的 `ok=true` 回执
+- ✅ **四种主题切换**: amber / matrix / void / neon 逐一截图
+- ✅ **窗格内 CLI**: `hive whoami` 输出渲染验证
+- ✅ **协作面板**: Agent 注册 + Run 创建真实渲染
+- ✅ **无 console 错误**: 任何浏览器 console error 都会判失败
+
+**产物 / Output**: `screenshots/` 下 9 张 PNG（README 画廊），每张对应一项 PASS 断言。
+
+**Evidence**: Exit code 0, output contains `screenshots: OK`, nine PNGs written.
 
 ---
 

@@ -33,11 +33,33 @@ terminal panes stay manual; managed agent panes are orchestrated.
 
 ## 界面预览 / Interface Preview
 
-| 主界面 / Main Interface | Matrix 主题 / Matrix Theme | 协作面板 / Collab Panel |
-|:---:|:---:|:---:|
-| ![主界面](screenshots/01-main-interface.png) | ![Matrix](screenshots/03-theme-matrix.png) | ![协作](screenshots/06-collab-panel.png) |
+All screenshots below are captured from the **real, running UI** by
+[`scripts/screenshots.mjs`](scripts/screenshots.mjs) (headless Chromium driving a live
+`HiveServer` with real PTYs) — not mockups. Re-run with `npm run screenshots`.
 
-*更多截图见 `screenshots/` 目录 / More screenshots in the `screenshots/` directory*
+| 主界面（默认琥珀石墨）/ Main Interface | 调度器展开 + 真实投递回执 / Orchestrator + real receipts |
+|:---:|:---:|
+| ![主界面](screenshots/01-main-interface.png) | ![琥珀主题](screenshots/02-theme-amber.png) |
+
+**四种主题 / Four themes**（同一真实场景 / same real scene）
+
+| Matrix | Void | Neon |
+|:---:|:---:|:---:|
+| ![Matrix](screenshots/03-theme-matrix.png) | ![Void](screenshots/04-theme-void.png) | ![Neon](screenshots/05-theme-neon.png) |
+
+| 窗格内 hive CLI / `hive whoami` in a pane | 协作面板 / Collaboration panel |
+|:---:|:---:|
+| ![窗格内 CLI](screenshots/09-pane-hive-cli.png) | ![协作](screenshots/06-collab-panel.png) |
+
+| 命令面板 (Ctrl+K) / Command palette | 活动追踪抽屉 / Activity trace drawer |
+|:---:|:---:|
+| ![命令面板](screenshots/07-command-palette.png) | ![追踪抽屉](screenshots/08-trace-drawer.png) |
+
+**桌面应用 / Desktop app**（打包 exe 的真实窗口 / real window from the packaged exe）
+
+| 桌面窗口 / Desktop window |
+|:---:|
+| ![桌面应用](screenshots/10-desktop-app.png) |
 
 ## What it does
 
@@ -252,6 +274,19 @@ npm start
 
 Then open the printed URL (`http://127.0.0.1:7420/?token=…`). Spawn panes with
 the **+ CLI pane** button. The trace file lives at `~/.clihive/trace.jsonl`.
+
+### Desktop app (Windows exe)
+
+```bash
+npm run desktop     # run the Electron shell in dev
+npm run build       # package: dist/clihive Setup 1.0.0.exe (installer) + dist/clihive 1.0.0.exe (portable)
+```
+
+The exe is a thin Electron shell: it spawns the server on your system
+Node.js (≥ 20, with `node-pty` prebuilt for it) and opens the UI in a native
+window — closing the window kills the server and every agent it spawned.
+The bundled `bin/hive` is put on the server's `PATH`, so `hive` works inside
+panes without a global npm install.
 
 ### The `hive` CLI (inside a pane)
 
