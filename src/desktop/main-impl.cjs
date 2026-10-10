@@ -124,6 +124,24 @@ function bundledBinDir() {
   return fs.existsSync(path.join(dev, shim)) ? dev : null;
 }
 
+/**
+ * Prepend a directory to the PATH entry of an env object.
+ *
+ * Windows env var names are case-insensitive but a plain JS object is not:
+ * the OS usually spells it `Path`, `{...process.env}` keeps that spelling, and
+ * a naive `env.PATH = ...` therefore adds a SECOND key. A child then receives
+ * two PATH variables and Windows may keep only the new one — silently dropping
+ * the real PATH, so `node` can no longer be resolved. Always mutate whichever
+ * spelling already exists.
+ */
+function prependToPath(env, dir) {
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  if (key) env[key] = `${dir}${sep}${env[key]}`;
+  else env.PATH = dir;
+  return env;
+}
+
 function startServer() {
   const entry = resolveServerEntry();
   log(`server entry: ${entry}`);
@@ -131,8 +149,7 @@ function startServer() {
   const env = { ...process.env, NODE_NO_WARNINGS: '1' };
   const bin = bundledBinDir();
   if (bin) {
-    const sep = process.platform === 'win32' ? ';' : ':';
-    env.PATH = bin + sep + (env.PATH || '');
+    prependToPath(env, bin);
     log(`PATH prepended with bundled bin: ${bin}`);
   }
   serverProcess = spawn(nodeCmd, [entry], {
@@ -143,6 +160,18 @@ function startServer() {
   });
   serverProcess.stdout.on('data', (d) => log(`[server] ${d.toString().trimEnd()}`));
   serverProcess.stderr.on('data', (d) => log(`[server:err] ${d.toString().trimEnd()}`));
+  serverProcess.on('error', (err) => {
+    // A missing `node` (or an unusable PATH) surfaces here, not as an exit.
+    log(`server spawn failed: ${err.message}`);
+    serverProcess = null;
+    if (!shuttingDown) {
+      dialog.showErrorBox('clihive',
+        `Could not start the clihive server.\n\n${err.message}\n\n`
+        + 'clihive runs its server on the system Node.js: make sure `node` (>= 20) '
+        + 'is on your PATH, or set CLIHIVE_NODE to its full path.');
+      app.quit();
+    }
+  });
   serverProcess.on('exit', (code, signal) => {
     log(`server exited code=${code} signal=${signal}`);
     serverProcess = null;
