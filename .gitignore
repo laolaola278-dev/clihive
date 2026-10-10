@@ -6,3 +6,9 @@ dist/
 
 *-out.txt
 *-err.txt
+
+.iconbuild/
+
+icon-source.png
+
+.iconcheck/

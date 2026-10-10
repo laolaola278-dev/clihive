@@ -279,7 +279,7 @@ the **+ CLI pane** button. The trace file lives at `~/.clihive/trace.jsonl`.
 
 ```bash
 npm run desktop     # run the Electron shell in dev
-npm run build       # package: dist/clihive Setup 1.0.0.exe (installer) + dist/clihive 1.0.0.exe (portable)
+npm run build       # package: dist/clihive Setup 0.1.0.exe (installer) + dist/clihive 0.1.0.exe (portable)
 ```
 
 The exe is a thin Electron shell: it spawns the server on your system
@@ -287,6 +287,24 @@ Node.js (≥ 20, with `node-pty` prebuilt for it) and opens the UI in a native
 window — closing the window kills the server and every agent it spawned.
 The bundled `bin/hive` is put on the server's `PATH`, so `hive` works inside
 panes without a global npm install.
+
+### App icon
+
+`icon.ico` is the Windows icon embedded in both the portable exe and the
+installer; `build/icon.png` (512×512) is the master artwork. To replace it,
+overwrite `build/icon.png` and rebuild:
+
+```bash
+npm run icon         # build/icon.png -> icon.ico (16/32/48/64/128/256, PNG-compressed)
+npm run verify:icon  # prove a built exe really carries icon.ico's artwork
+npm run build        # re-package with the new icon
+```
+
+`npm run icon` needs Windows PowerShell (`System.Drawing`) for the resize step;
+the `icon.ico` container itself is assembled by a dependency-free Node script.
+`npm run verify:icon` searches the exe binary for the exact PNG byte sequences
+stored in `icon.ico`, so it distinguishes "our icon" from the default Electron
+icon rather than just checking that a build warning disappeared.
 
 ### The `hive` CLI (inside a pane)
 

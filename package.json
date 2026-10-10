@@ -17,6 +17,8 @@
     "build": "electron-builder --win --x64",
     "build:portable": "electron-builder --win portable",
     "build:installer": "electron-builder --win nsis",
+    "icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-ico.ps1",
+    "verify:icon": "node scripts/verify-icon.mjs",
     "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
@@ -43,6 +45,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -63,7 +66,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "clihive"
+      "shortcutName": "clihive",
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
     }
   },
   "devDependencies": {
