@@ -92,6 +92,10 @@ const dom = {
   setScanlines: $('set-scanlines'),
   setGlow: $('set-glow'),
   setBgClear: $('set-bg-clear'),
+  winMinimize: $('win-minimize'),
+  winMaximize: $('win-maximize'),
+  winClose: $('win-close'),
+  titlebarClock: $('titlebar-clock'),
 };
 
 const token = new URLSearchParams(location.search).get('token') ?? '';
@@ -258,6 +262,30 @@ function mountPane(pane) {
   node.querySelector('.pane-kill').addEventListener('click', (e) => {
     e.stopPropagation();
     send({ type: WS_CLIENT.PANE_KILL, paneId: pane.id });
+  });
+
+  // Right-click paste (and Ctrl+Shift+V). If text is selected, right-click copies instead.
+  node.addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    const selection = term.getSelection();
+    if (selection) {
+      if (window.electronAPI) {
+        await window.electronAPI.writeClipboard(selection);
+      } else {
+        try { await navigator.clipboard.writeText(selection); } catch {}
+      }
+    } else {
+      let text = '';
+      if (window.electronAPI) {
+        text = await window.electronAPI.readClipboard();
+      } else {
+        try { text = await navigator.clipboard.readText(); } catch {}
+      }
+      if (text) {
+        term.paste(text);
+        send({ type: WS_CLIENT.PANE_INPUT, paneId: pane.id, data: text });
+      }
+    }
   });
 
   requestAnimationFrame(() => { fitPane(entry); send({ type: WS_CLIENT.PANE_SUBSCRIBE, paneId: pane.id }); });

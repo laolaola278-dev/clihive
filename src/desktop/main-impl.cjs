@@ -3,7 +3,7 @@
 // then opens a single window pointing at the local UI.
 // Closing the window kills the server.
 
-const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -17,6 +17,18 @@ const TOKEN_PATH = path.join(TOKEN_DIR, 'token');
 let mainWindow = null;
 let serverProcess = null;
 let shuttingDown = false;
+
+// Window control IPC handlers for frameless window
+ipcMain.handle('window:minimize', () => mainWindow?.minimize());
+ipcMain.handle('window:maximize', () => {
+  if (mainWindow?.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow?.maximize();
+  }
+});
+ipcMain.handle('window:close', () => mainWindow?.close());
+ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
@@ -283,8 +295,15 @@ app.on('activate', () => {
     mainWindow = new BrowserWindow({
       width: 1400, height: 900, title: 'clihive',
       backgroundColor: '#1a1a1a',
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      frame: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: false,
+        preload: path.join(__dirname, 'preload.cjs'),
+      },
     });
+    Menu.setApplicationMenu(null);
     mainWindow.loadURL(url);
   }
 });
