@@ -265,6 +265,58 @@ keystrokes into a TUI.
   model endpoint) turns an objective into ≤12 tasks with observable acceptance
   criteria and an independent verification task.
 
+## Plugins (collection configuration)
+
+A plugin is one JSON file in `~/.clihive/plugins/` — drop it in and **every
+managed CLI** (the leading agent and all its peers) gets it on its next turn.
+No extra agents to create; skills and agent-level prompts are injected
+straight into the turn prompt the hive already builds.
+
+```json
+{
+  "name": "review-buddy",
+  "version": "1.0.0",
+  "description": "shared habits for every agent",
+  "skills": [
+    { "name": "triage", "prompt": "Reproduce before fixing; write the failing test first." },
+    { "name": "small-diffs", "prompt": "Prefer minimal diffs; one concern per change." }
+  ],
+  "agentPrompt": "Cite file:line evidence for every claim in your summary.",
+  "historyTurns": 5,
+  "providers": []
+}
+```
+
+- **skills** — named prompt fragments, injected as a `## Skills` section.
+- **agentPrompt** — extra guidance injected as `## Additional guidance`.
+- **historyTurns** — how many of the agent's *own* past task results ride
+  along as `## Your own recent history` (local history → 继续开发: the agent
+  continues where it left off instead of starting cold).
+- **providers** — `[]` (or omitted) applies to *every* CLI; `["codex","claude"]`
+  scopes a plugin to just those CLIs. This is the 统领 CLI + 多 CLI adaptation:
+  one collection entry, per-CLI filtering.
+- Validation is strict (unknown fields rejected, malformed files fail startup
+  closed) and a plugin persists only after passing it.
+
+Manage the set with the CLI:
+
+```
+hive plugins                        # list the active set
+hive plugins show review-buddy     # full definition
+hive plugins add my-plugin.json    # validate + install
+hive plugins remove review-buddy
+```
+
+or over HTTP: `GET/POST /api/plugins`, `GET/DELETE /api/plugins/:name`
+(operator token, same as the rest of the managed API).
+
+**Continuing development across runs.** `hive runs continue <runId> <objective>
+--agents <ids> [--plan|--tasks-file f]` creates a new run seeded with the old
+run's completed results: every new task's instruction is prefixed with
+`## Prior work this run continues`, listing what each completed task produced.
+The per-agent history injection above covers the *agent-level* memory; this
+bridges the *run-level* context.
+
 ## Run it
 
 ```bash

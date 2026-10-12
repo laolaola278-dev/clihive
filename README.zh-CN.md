@@ -173,6 +173,52 @@ Agent 是 hive 通过其结构化 CLI 驱动的无头 codex/claude 进程——�
   回答被阻止的问题、实时 Agent 事件流）和下面的 `hive` CLI。可选的规划器（需要模型端点）
   将目标转换为 ≤12 个任务，具有可观察的验收标准和独立的验证任务。
 
+## 插件（集合配置）
+
+一个插件就是 `~/.clihive/plugins/` 下的一个 JSON 文件——放进去，**所有托管 CLI**（统领 Agent
+和所有其他 Agent）在下一个回合自动获得它。无需单独创建 agents；skill 与 agent 提示词直接
+注入 hive 已经在构建的回合提示词。
+
+```json
+{
+  "name": "review-buddy",
+  "version": "1.0.0",
+  "description": "所有 agent 的共享习惯",
+  "skills": [
+    { "name": "triage", "prompt": "先复现再修复；先写失败的测试。" },
+    { "name": "small-diffs", "prompt": "倾向最小 diff；一次改动只关注一件事。" }
+  ],
+  "agentPrompt": "总结中的每个结论都要引用 file:line 证据。",
+  "historyTurns": 5,
+  "providers": []
+}
+```
+
+- **skills** —— 命名的提示词片段，注入为 `## Skills` 段。
+- **agentPrompt** —— 额外指导，注入为 `## Additional guidance` 段。
+- **historyTurns** —— 该 agent *自己*过去多少条任务结果随行注入为
+  `## Your own recent history`（本地历史 → 继续开发：agent 从上次停下的地方继续，而不是冷启动）。
+- **providers** —— `[]`（或省略）对*每一个* CLI 生效；`["codex","claude"]` 只作用于这些 CLI。
+  这就是统领 CLI + 多 CLI 的适配：一条集合配置，按 CLI 过滤。
+- 校验是严格的（未知字段拒绝、损坏的文件让启动失败关闭），插件只有通过校验才会落盘。
+
+用 CLI 管理：
+
+```
+hive plugins                        # 列出激活的插件集
+hive plugins show review-buddy     # 完整定义
+hive plugins add my-plugin.json    # 校验 + 安装
+hive plugins remove review-buddy
+```
+
+或走 HTTP：`GET/POST /api/plugins`、`GET/DELETE /api/plugins/:name`
+（操作员 token，与托管 API 其余部分相同）。
+
+**跨运行继续开发。** `hive runs continue <runId> <objective> --agents <ids>
+[--plan|--tasks-file f]` 创建一个由旧 run 已完成任务结果播种的新 run：每个新任务的指令都带上
+`## Prior work this run continues` 前缀，列出每个完成的任务产出了什么。上面的按 agent 历史注入
+覆盖 *agent 级*记忆；这个桥接 *run 级*上下文。
+
 ## 运行它
 
 ```bash

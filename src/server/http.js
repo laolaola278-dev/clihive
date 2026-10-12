@@ -38,6 +38,7 @@ import { CollaborationError } from './collaboration-validation.js';
 import { detectCli } from './agent-runtime/adapters.js';
 import { MANAGED_PROVIDERS } from './collaboration-validation.js';
 import { resolveCliExecutable } from './agent-runtime/resolve-cli.js';
+import { PluginRegistry, validatePlugin } from './plugins.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -107,6 +108,14 @@ export class HiveServer {
     this.store = null;
     /** @type {CollaborationService|null} */
     this.collaboration = null;
+
+    // Plugin set (collection configuration): every managed turn consults it.
+    // Loading happens in start() (constructor is synchronous); a load failure
+    // is fatal there — silently running with half the plugins would change
+    // what agents are told without anyone noticing.
+    this.pluginsDir = options.pluginsDir === undefined ? path.join(hiveHome(), 'plugins') : options.pluginsDir;
+    this.pluginRegistry = new PluginRegistry(this.pluginsDir);
+    this.plugins = Array.isArray(options.plugins) ? options.plugins : [];
 
     /** @type {Set<import('ws').WebSocket>} */
     this.clients = new Set();
@@ -547,6 +556,65 @@ export class HiveServer {
       }
 
       // --- managed collaboration endpoints (operator token) ----------------
+      let m;
+      if (route === 'plugins' && method === 'GET') {
+        this.#json(res, 200, {
+          pluginsDir: this.pluginsDir,
+          plugins: this.plugins.map((p) => ({
+            name: p.name, version: p.version, description: p.description,
+            skills: p.skills.map((s) => s.name),
+            hasAgentPrompt: Boolean(p.agentPrompt),
+            historyTurns: p.historyTurns ?? 0,
+            providers: p.providers ?? [],
+          })),
+        });
+        return;
+      }
+
+      if (route === 'plugins' && method === 'POST') {
+        const body = await this.#readBody(req);
+        // save() re-validates; a persisted plugin is always well-formed.
+        const plugin = await this.pluginRegistry.save(body);
+        this.plugins = await this.pluginRegistry.load();
+        if (this.collaboration) this.collaboration.plugins = this.plugins;
+        this.#json(res, 201, { plugin });
+        return;
+      }
+
+      if ((m = route.match(/^plugins\/([^/]+)$/)) && method === 'GET') {
+        const plugin = await this.pluginRegistry.get(decodeURIComponent(m[1]));
+        if (!plugin) { this.#json(res, 404, { error: `unknown plugin: ${m[1]}` }); return; }
+        this.#json(res, 200, { plugin });
+        return;
+      }
+
+      if ((m = route.match(/^plugins\/([^/]+)$/)) && method === 'DELETE') {
+        await this.pluginRegistry.remove(decodeURIComponent(m[1]));
+        this.plugins = await this.pluginRegistry.load();
+        if (this.collaboration) this.collaboration.plugins = this.plugins;
+        this.#json(res, 200, { removed: m[1], plugins: this.plugins.length });
+        return;
+      }
+
+      if ((m = route.match(/^runs\/([^/]+)\/continue$/)) && method === 'POST') {
+        const body = await this.#readBody(req);
+        const svc = this.#requireCollab();
+        const { tasks: _ignoredTasks, plan, ...runInput } = body;
+        let taskInputs = Array.isArray(body.tasks) ? body.tasks : [];
+        let acceptanceCriteria = body.acceptanceCriteria ?? null;
+        if (plan) {
+          const agents = (body.agentIds ?? []).map((id) => svc.agent(id)).filter(Boolean);
+          const planned = await this.orchestrator.planRun({
+            objective: body.objective, agents, acceptanceCriteria,
+          });
+          taskInputs = planned.tasks;
+          acceptanceCriteria = planned.acceptanceCriteria;
+        }
+        const run = await svc.continueRun(decodeURIComponent(m[1]), { ...runInput, acceptanceCriteria }, taskInputs);
+        this.#json(res, 201, { run, continuedFrom: m[1], tasks: svc.listTasks(run.id) });
+        return;
+      }
+
       if (route === 'agents/capabilities' && method === 'GET') {
         const capabilities = {};
         for (const provider of MANAGED_PROVIDERS) {
@@ -574,7 +642,6 @@ export class HiveServer {
         return;
       }
 
-      let m;
       if ((m = route.match(/^agents\/([^/]+)\/messages$/)) && method === 'POST') {
         const body = await this.#readBody(req);
         const message = await this.#requireCollab().deliverExternalMessage({
@@ -770,11 +837,15 @@ export class HiveServer {
     // Bring up the durable collaboration store and its scheduler. A failure
     // here is fatal: managed agents must never run without durable state.
     if (this.collabDir) {
+      if (!Array.isArray(this.plugins) || !this.plugins.length) {
+        this.plugins = await this.pluginRegistry.load();
+      }
       this.store = await CollaborationStore.open(this.collabDir);
       this.collaboration = new CollaborationService({
         store: this.store,
         bus: this.bus,
         tracer: this.tracer,
+        plugins: this.plugins,
         ...this.collabOptions,
       });
       await this.collaboration.init();

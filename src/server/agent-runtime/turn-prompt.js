@@ -22,10 +22,18 @@ function section(title, body) {
  * @param {{id:string,label:string,provider:string}[]} input.peers agents this one may message
  * @param {{id:string,summary:string,verification?:object}[]} [input.dependencyResults]
  * @param {{from:string,text:string}[]} [input.inbox] pending peer/operator messages
+ * @param {{name:string,prompt:string,plugin?:string}[]} [input.skills] plugin-injected skill prompts
+ * @param {string|null} [input.pluginPrompt] plugin-injected extra guidance
+ * @param {{taskId:string,instruction:string,outcome:string,summary:string}[]} [input.history]
+ *        this agent's own past task results (local history for continue-development)
  * @returns {string}
  */
 export function buildTurnPrompt(input) {
-  const { agent, run, task, permissionProfile, peers, dependencyResults = [], inbox = [] } = input;
+  const {
+    agent, run, task, permissionProfile, peers,
+    dependencyResults = [], inbox = [],
+    skills = [], pluginPrompt = null, history = [],
+  } = input;
   const parts = [];
 
   parts.push(`# Collaboration turn\n`);
@@ -33,6 +41,18 @@ export function buildTurnPrompt(input) {
 
   parts.push(section('Permission profile', PROFILE_TEXT[permissionProfile] ?? PROFILE_TEXT['read-only']));
   parts.push(section('Working directory', `\`${task.cwd ?? run.cwd ?? ''}\``.trim()));
+
+  if (skills.length) {
+    parts.push(section('Skills (from the active plugin set)',
+      skills.map((s) => `- **${s.name}**${s.plugin ? ` (plugin \`${s.plugin}\`)` : ''}: ${s.prompt}`).join('\n')));
+  }
+  if (pluginPrompt) {
+    parts.push(section('Additional guidance (from the active plugin set)', pluginPrompt));
+  }
+  if (history.length) {
+    parts.push(section('Your own recent history in this hive (continue where you left off)',
+      history.map((h) => `- task \`${h.taskId}\` [${h.outcome}]: ${h.instruction.slice(0, 400)}\n  result: ${h.summary}`).join('\n')));
+  }
 
   parts.push(section('Run objective', run.objective));
   if (run.acceptanceCriteria?.length) {

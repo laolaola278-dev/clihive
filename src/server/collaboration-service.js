@@ -24,6 +24,7 @@ import { buildResultSchema } from './agent-runtime/result-schema.js';
 import { buildTurnPrompt } from './agent-runtime/turn-prompt.js';
 import { ADAPTERS, detectCli, killProcessTree, runTurn } from './agent-runtime/adapters.js';
 import { resolveCliExecutable } from './agent-runtime/resolve-cli.js';
+import { pluginsForTurn } from './plugins.js';
 
 const TERMINAL_TASK_STATES = ['completed', 'failed', 'cancelled'];
 const ACTIVE_TASK_STATES = ['queued', 'running', 'awaiting_review', 'uncertain'];
@@ -66,6 +67,7 @@ export class CollaborationService extends EventEmitter {
     killTree = killProcessTree,
     baseEnv = process.env,
     platform = process.platform,
+    plugins = [],
   } = {}) {
     super();
     this.setMaxListeners(0);
@@ -82,6 +84,7 @@ export class CollaborationService extends EventEmitter {
     this.killTree = killTree;
     this.baseEnv = baseEnv;
     this.platform = platform;
+    this.plugins = Array.isArray(plugins) ? plugins : [];
   }
 
   // --- lifecycle -------------------------------------------------------------
@@ -299,6 +302,38 @@ export class CollaborationService extends EventEmitter {
     return tasks.map((t) => this.task(t.id));
   }
 
+  /**
+   * Continue development from a finished run: create a new run whose tasks
+   * carry the previous run's results as dependency-style context, so a
+   * "继续开发" turn starts where the old one ended instead of cold.
+   *
+   * The plugin set already injects each agent's own history; continueRun adds
+   * the cross-run bridge: the referenced run's completed task summaries are
+   * prepended to every new task's instruction as explicit prior-work context.
+   * Validation is identical to createRun — this is sugar, not a new trust path.
+   *
+   * @param {string} fromRunId run whose completed tasks seed the context
+   * @param {object} input normal createRun input (objective/agents/…)
+   * @param {object[]} taskInputs normal task inputs
+   */
+  async continueRun(fromRunId, input, taskInputs = []) {
+    const fromRun = this.run(fromRunId);
+    if (!fromRun) throw new CollaborationError(`Unknown run ${fromRunId}`, 404);
+    const done = this.listTasks(fromRunId).filter((t) => t.state === 'completed' && t.result);
+    if (!done.length) {
+      throw new CollaborationError(`Run ${fromRunId} has no completed tasks to continue from`, 409, 'NO_HISTORY');
+    }
+    const priorWork = done.map((t) => `- task \`${t.id}\` by ${t.assignee} [${t.result.outcome}]: ${t.result.summary}`).join('\n');
+    const bridge = `## Prior work this run continues\nYou are continuing development after a previous run. Its completed results:\n${priorWork}\nBuild on them; do not redo finished work.\n\n## Your task\n`;
+    const continued = taskInputs.map((t) => ({
+      ...t,
+      instruction: `${bridge}${String(t.instruction ?? '')}`,
+    }));
+    const run = await this.createRun(input, continued);
+    this.#trace('run.continue', { fromRunId, runId: run.id, priorTasks: done.length });
+    return run;
+  }
+
   // --- scheduling ----------------------------------------------------------------
 
   async pump() {
@@ -432,6 +467,23 @@ export class CollaborationService extends EventEmitter {
 
   // --- dispatch ------------------------------------------------------------------
 
+  /**
+   * This agent's own past task results, most recent last — the local history
+   * a plugin asks for so an agent can continue development instead of
+   * starting cold. Only terminal, result-bearing tasks count as history.
+   */
+  #agentHistory(agentId, turns) {
+    const tasks = this.store.list('tasks')
+      .filter((t) => t.assignee === agentId && t.result && TERMINAL_TASK_STATES.includes(t.state))
+      .sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0));
+    return tasks.slice(-turns).map((t) => ({
+      taskId: t.id,
+      instruction: String(t.instruction ?? ''),
+      outcome: String(t.result?.outcome ?? 'unknown'),
+      summary: String(t.result?.summary ?? '(no summary)'),
+    }));
+  }
+
   async #dispatch(taskId, decision) {
     const { agent, run, permission } = decision;
     const attemptId = this.ids('att');
@@ -449,10 +501,21 @@ export class CollaborationService extends EventEmitter {
       .filter(Boolean)
       .map((a) => ({ id: a.id, label: a.label, provider: a.provider }));
 
+    // Plugin-injected material applies to every managed CLI that the plugin
+    // set covers (empty providers filter = all), so one collection entry is
+    // usable by the leading CLI and all its peers without extra agents.
+    const { skills, agentPrompt: pluginPrompt, historyTurns } = pluginsForTurn(this.plugins, {
+      provider: agent.provider,
+    });
+    const history = historyTurns > 0
+      ? this.#agentHistory(agent.id, historyTurns)
+      : [];
+
     const prompt = buildTurnPrompt({
       agent, run, task: { ...task, cwd: agent.cwd },
       permissionProfile: permission, peers, dependencyResults,
       inbox: pending.map((m) => ({ from: m.from, text: m.text })),
+      skills, pluginPrompt, history,
     });
 
     // Persist the attempt BEFORE any process exists.

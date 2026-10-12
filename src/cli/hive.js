@@ -49,6 +49,16 @@ Managed agents (Codex/Claude collaboration):
   hive tasks cancel <taskId>
   hive tasks retry <taskId> --reason <text> --stopped --reviewed
 
+Plugins (collection configuration, shared by every managed CLI):
+  hive plugins [--json]                       List the active plugin set
+  hive plugins show <name> [--json]           One plugin's full definition
+  hive plugins add <file.json> [--json]       Validate + install from a JSON file
+  hive plugins remove <name>                  Remove a plugin from the set
+  hive runs continue <runId> <objective...> --agents <id,id>
+        [--plan] [--criteria "c1;c2"] [--tasks-file <json>]
+                                               New run seeded with the old run's
+                                               completed results (local history)
+
 Options:
   --to <addr>     Target: a pane id, an agent id, "all", "orchestrator", or "human"
   --kind <kind>   chat (default), task, or result
@@ -322,6 +332,29 @@ const commands = {
 
   async runs(opts) {
     const sub = opts._[1];
+    if (sub === 'continue') {
+      const runId = opts._[2];
+      const objective = opts._.slice(3).join(' ').trim();
+      if (!runId || !objective) throw new Error('usage: hive runs continue <runId> <objective...> --agents <id,id> [--plan | --tasks-file f.json]');
+      const agentIds = (opts.agents ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (!agentIds.length) throw new Error('--agents <id,id> is required (see: hive agents)');
+      const body = { objective, agentIds };
+      if (opts.permission) body.permissionProfile = opts.permission;
+      if (opts.criteria) body.acceptanceCriteria = opts.criteria.split(';').map((s) => s.trim()).filter(Boolean);
+      if (opts.plan) body.plan = true;
+      if (opts.tasksFile) body.tasks = JSON.parse(await readFile(opts.tasksFile, 'utf8'));
+      if (!body.plan && !Array.isArray(body.tasks)) {
+        throw new Error('provide --plan (model decomposes the objective) or --tasks-file <json>');
+      }
+      const result = await api(opts, `runs/${encodeURIComponent(runId)}/continue`, { method: 'POST', body });
+      out(opts, result, [
+        `run ${result.run.id} [${result.run.state}] continued from ${result.continuedFrom}`,
+        `  objective: ${objective}`,
+        `  agents: ${result.run.agentIds.join(', ')}`,
+        ...result.tasks.map((t) => `  task ${t.id.padEnd(20)} -> ${t.assignee} [${t.state}]`),
+      ]);
+      return;
+    }
     if (['pause', 'resume', 'cancel'].includes(sub)) {
       const runId = opts._[2];
       if (!runId) throw new Error(`usage: hive runs ${sub} <runId> [--reason text]`);
@@ -444,6 +477,52 @@ const commands = {
         ? `pane ${info.paneId} ("${info.label}") in hive ${info.url}`
         : 'not running inside a hive pane',
     ]);
+  },
+
+  async plugins(opts) {
+    const sub = opts._[1];
+    if (sub === 'show') {
+      const name = opts._[2];
+      if (!name) throw new Error('usage: hive plugins show <name>');
+      const result = await api(opts, `plugins/${encodeURIComponent(name)}`);
+      const p = result.plugin;
+      out(opts, result, [
+        `plugin ${p.name} v${p.version}${p.description ? ` — ${p.description}` : ''}`,
+        `  skills: ${p.skills.length ? p.skills.map((s) => `${s.name}: ${s.prompt.slice(0, 80)}`).join('; ') : '(none)'}`,
+        `  agentPrompt: ${p.agentPrompt ? p.agentPrompt.slice(0, 120) : '(none)'}`,
+        `  historyTurns: ${p.historyTurns ?? 0}`,
+        `  providers: ${p.providers?.length ? p.providers.join(', ') : '(all CLIs)'}`,
+      ]);
+      return;
+    }
+    if (sub === 'add') {
+      const file = opts._[2];
+      if (!file) throw new Error('usage: hive plugins add <file.json>');
+      const plugin = JSON.parse(await readFile(file, 'utf8'));
+      const result = await api(opts, 'plugins', { method: 'POST', body: plugin });
+      const p = result.plugin;
+      out(opts, result, [
+        `installed ${p.name} v${p.version}`,
+        `  skills: ${p.skills.length}${p.agentPrompt ? ' + agentPrompt' : ''}${p.historyTurns ? ` + historyTurns=${p.historyTurns}` : ''}`,
+        `  providers: ${p.providers?.length ? p.providers.join(', ') : '(all CLIs)'}`,
+      ]);
+      return;
+    }
+    if (sub === 'remove') {
+      const name = opts._[2];
+      if (!name) throw new Error('usage: hive plugins remove <name>');
+      const result = await api(opts, `plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      out(opts, result, [`removed ${result.removed} (${result.plugins} plugin(s) active)`]);
+      return;
+    }
+    if (sub) throw new Error(`unknown plugins subcommand: ${sub}`);
+    const result = await api(opts, 'plugins');
+    out(opts, result, result.plugins.length === 0
+      ? [`no plugins (${result.pluginsDir}) — add with: hive plugins add <file.json>`]
+      : [
+        `${result.plugins.length} plugin(s) in ${result.pluginsDir}`,
+        ...result.plugins.map((p) => `${p.name.padEnd(24)} v${p.version.padEnd(8)} skills=${p.skills.length}${p.hasAgentPrompt ? ' +prompt' : ''}${p.historyTurns ? ` history=${p.historyTurns}` : ''}${p.providers.length ? ` providers=${p.providers.join(',')}` : ' providers=all'}`),
+      ]);
   },
 };
 
