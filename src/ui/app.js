@@ -87,7 +87,6 @@ const dom = {
   setTheme: $('set-theme'),
   setBg: $('set-bg'),
   setBgFit: $('set-bg-fit'),
-  setBgFit: $('set-bg-fit'),
   setBgOpacity: $('set-bg-opacity'),
   setScanlines: $('set-scanlines'),
   setGlow: $('set-glow'),
@@ -283,7 +282,6 @@ function mountPane(pane) {
       }
       if (text) {
         term.paste(text);
-        send({ type: WS_CLIENT.PANE_INPUT, paneId: pane.id, data: text });
       }
     }
   });
@@ -1393,7 +1391,48 @@ window.addEventListener('keydown', (e) => {
   else if (key === 'j') { e.preventDefault(); setOrchOpen(dom.orch.dataset.open !== 'true'); }
   else if (key === 'b') { e.preventDefault(); toggleSidebar(); }
   else if (key === 't' && e.shiftKey) { e.preventDefault(); setTraceOpen(dom.traceDrawer.dataset.open !== 'true'); }
+  else if (key === 'c' && e.shiftKey) {
+    e.preventDefault();
+    if (focusedPane) {
+      const entry = panes.get(focusedPane);
+      const selection = entry?.term.getSelection();
+      if (selection) {
+        if (window.electronAPI) window.electronAPI.writeClipboard(selection);
+        else navigator.clipboard?.writeText(selection).catch(() => {});
+      }
+    }
+  }
+  else if (key === 'v' && e.shiftKey) {
+    e.preventDefault();
+    if (focusedPane) {
+      const entry = panes.get(focusedPane);
+      if (entry) {
+        (async () => {
+          let text = '';
+          if (window.electronAPI) text = await window.electronAPI.readClipboard();
+          else try { text = await navigator.clipboard.readText(); } catch {}
+          if (text) entry.term.paste(text);
+        })();
+      }
+    }
+  }
 });
+
+// Frameless window controls + clock
+dom.winMinimize?.addEventListener('click', () => window.electronAPI?.minimize());
+dom.winMaximize?.addEventListener('click', () => window.electronAPI?.maximize());
+dom.winClose?.addEventListener('click', () => window.electronAPI?.close());
+
+function updateTitlebarClock() {
+  if (dom.titlebarClock) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    dom.titlebarClock.textContent = `${hh}:${mm}`;
+  }
+}
+updateTitlebarClock();
+setInterval(updateTitlebarClock, 30000);
 
 let resizeTimer = null;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(fitAll, 120); });

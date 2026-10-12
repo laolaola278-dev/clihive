@@ -262,14 +262,25 @@ async function createWindow() {
     minHeight: 600,
     title: 'clihive',
     backgroundColor: '#1a1a1a',
+    frame: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
+  Menu.setApplicationMenu(null);
   mainWindow.loadURL(url);
+
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window:maximized', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window:maximized', false);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

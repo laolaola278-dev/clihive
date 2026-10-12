@@ -245,6 +245,18 @@ body.glow-on[data-theme="neon"] .pane[data-focused="true"]::before {
 .conn[data-state="live"] { color: var(--ok); }
 .conn[data-state="down"] { color: var(--danger); }
 
+.titlebar-clock { font-family: var(--mono); font-size: 11px; color: var(--text-sub); }
+.titlebar-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 46px; height: 100%; border: none; background: none;
+  color: var(--text-sub); cursor: pointer; padding: 0;
+  transition: background 0.12s, color 0.12s;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.titlebar-btn:hover { background: rgba(239,238,236,0.08); color: var(--text-main); }
+.titlebar-btn svg { width: 10px; height: 10px; stroke: currentColor; stroke-width: 1.4; fill: none; }
+.titlebar-btn-close:hover { background: #e81123; color: #fff; }
+
 /* ---------- body: sidebar | hero | deck ---------- */
 .body { display: flex; flex: 1 1 auto; min-height: 0; position: relative; }
 
