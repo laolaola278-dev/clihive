@@ -79,7 +79,9 @@ export class HiveServer {
     this.port = clampInt(options.port ?? process.env.CLIHIVE_PORT ?? DEFAULT_PORT, 0, 65535, DEFAULT_PORT);
     this.host = options.host ?? '127.0.0.1';
     this.rootDir = options.rootDir ?? process.cwd();
-    this.cwd = options.cwd ?? process.cwd();
+    // Panes should default to a user-friendly directory, not the server's cwd.
+    // CLIHIVE_PANE_CWD is set by the desktop launcher to the user's home.
+    this.cwd = options.cwd ?? process.env.CLIHIVE_PANE_CWD ?? process.cwd();
     this.token = options.token ?? randomBytes(24).toString('hex');
     this.writeToken = options.writeToken !== false;
     this.startedAt = Date.now();

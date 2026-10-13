@@ -164,9 +164,13 @@ function startServer() {
     prependToPath(env, bin);
     log(`PATH prepended with bundled bin: ${bin}`);
   }
+  // Use the user's home directory as the default pane working directory.
+  // The server's own cwd (where the exe extracts) is not useful for panes.
+  const serverCwd = path.dirname(path.dirname(entry));
+  const paneCwd = process.env.CLIHIVE_PANE_CWD || os.homedir();
   serverProcess = spawn(nodeCmd, [entry], {
-    env,
-    cwd: path.dirname(path.dirname(entry)),
+    env: { ...env, CLIHIVE_PANE_CWD: paneCwd },
+    cwd: serverCwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
